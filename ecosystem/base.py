@@ -1,7 +1,7 @@
 # local scripts
 from ecosystem.community import EcosystemCommunity
 from ecosystem.grid import EcosystemGrid
-from ecosystem.analyze import EcosystemAnalize
+from ecosystem.analyze import EcosystemAnalyze
 from ecosystem.plot import EcosystemPlot
 from ecosystem.clustering import EcosystemClustering
 
@@ -9,6 +9,11 @@ from cobra import Model
 
 
 class BaseEcosystem():
+    """Abstract base class for ecosystem models
+
+    This class is meant to be inherited and not to be used on its own. 
+    Holds all attributes and methods in common between FullEcosystem and PrecomputedEcosystem."""
+
     def __init__(self, community_name: str = "community", community_id: str = "community"):
         self.community_name = community_name                
         self.community_id = community_id
@@ -25,9 +30,8 @@ class BaseEcosystem():
     def _build_modules(self):
         self.community = EcosystemCommunity(self)
         self.grid = EcosystemGrid(self, points = None, feasible_points = None, pfractions = None, grid_step = None)
-        self.analyze = EcosystemAnalize(self)
+        self.analyze = EcosystemAnalyze(self)
         self.plot = EcosystemPlot(self)
         self.clustering = EcosystemClustering(self)
 
 
-    

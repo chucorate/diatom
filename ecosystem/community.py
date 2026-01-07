@@ -2,114 +2,103 @@ import numpy as np
 import pandas as pd
 
 import cobra
+from cobra import Model, Reaction
 from cobra.util.array import create_stoichiometric_matrix
 from scipy.sparse import lil_matrix
 
 from benpy import vlpProblem
 from benpy import solve as bensolve
 
-from typing import Any, TYPE_CHECKING
+from typing import Any, Iterable, TYPE_CHECKING, cast
+
+Numerical = int | float
 
 if TYPE_CHECKING:
     from ecosystem.base import BaseEcosystem
 
 
 class EcosystemCommunity():
+    """
+    exchange_metabolite_info : dict[str, dict[str, dict]]
+        Mapping from metabolite ids to per-member exchange metadata.
+
+    member_reactions : dict[str, list[str]]
+        Mapping from member model ids to reaction ids belonging to each member."""
+
     def __init__(self, base_ecosystem: "BaseEcosystem"):
         self.ecosystem = base_ecosystem
-        self.exchange_metabolite_info: dict[str, dict[str, Any]] = dict()
-        self.mo_fba_sol = None
-        self.non_blocked = None
-        self.member_rxns = None
+        self.exchange_metabolite_info: dict[str, dict[str, dict[str, Any]]] = dict()
+        self.member_reactions: dict[str, list[str]] = dict()
+        self.non_blocked: set[str] = set()
+
+        self.mo_fba_sol: Any = None
         
+          
     @property
-    def member_model_ids(self):
+    def member_model_ids(self) -> list[str]:
         return self.ecosystem.member_model_ids
 
+
     @property
-    def community_model(self):
+    def community_model(self) -> Model:
         return self.ecosystem.community_model
-
-
-    # USADO EXPLICITAMENTE
-    def set_pool_bounds(self, pool_metabolites, bioCons = None):
-        """ 
-        Changes pool exchange reaction bounds of metabolites in pool_metabolites.
-        If a metabolite is not part of the pool a warning is raised and nothing is done.
-        
-        pool_metabolites: dictionary. 
-                          keys: metabolite ids (without prefix, i.g., glyc_e) 
-                          values: reaction bounds for the corresponding exchange reactions.
-        factor: int. Factor to be considered in exchange reactions of the organisms of the community.
-                    An organism can consume as maximum as value(from dict)*factor*fraction of that organism
-                    in the community. Hence, bigger values make this constraint more flexible
-        """
-        
-        for mid in pool_metabolites:
-            if mid in self.exchange_metabolite_info:
-                #Changing pool exchange reaction bounds
-                rid = "EX_%s" % mid
-                ex = self.community_model.reactions.get_by_id(rid)
-                ex.bounds= pool_metabolites[mid]
-                #Changing members exchange reaction bounds
-                for member in self.exchange_metabolite_info[mid]:
-                    ex_id = self.exchange_metabolite_info[mid][member]['ex_id']
-
-                    if ex_id is not None:
-                        ex = self.community_model.reactions.get_by_id(ex_id)
-                        nlb = pool_metabolites[mid][0]
-                        if nlb <= 0 and bioCons is not None:
-                            #ex.lower_bound = nlb
-                            ex.lower_bound = bioCons
-                
-            else:
-                print("Skipping %s ..." % mid)
-                print("Warning: %s is not a part of pool metabolites." % mid)
-
-            self.non_blocked = None    
-
-
-    def set_member_exchange_bounds(self, member_model_id, exchange_metabolites) -> None:
-        """ 
-        Changes member exchange reaction bounds of metabolites in exchange_metabolites.
-        If a metabolite is not part of the exchanges a warning is raised and nothing is done.
-        
-        member_prefix: member model whose exchange reactions are modified
-        exchange_metabolites: dictionary. 
-
-        keys: metabolite ids (without prefix, i.g., glyc_e)
-        
-        values: reaction bounds for the corresponding exchange reactions.
-        """            
-            
-        df =  self._get_exchange_df('ex_id') #id of member exchange reactions   
-        
-        for m in exchange_metabolites:
-            new_bounds = exchange_metabolites[m]
-            if m in df.index:
-                rid = df.loc[m, member_model_id]
-                if rid is not None:
-                    rxn = self.community_model.reactions.get_by_id(rid)
-                    rxn.bounds = new_bounds
-                    self.exchange_metabolite_info[m][member_model_id]['bounds'] = new_bounds
-                else:
-                    print("No exchange reaction for %s in %s. Skypping..." % (m, member_model_id))
-            else:
-                print("No exchange or pool reactions for %s. Skypping" % m)
-                 
-                 
-    def show_member_exchanges(self, mids=None):
-        df = self._get_exchange_df('bounds')
-        if mids is not None:
-            df = df.loc[mids]
-
-        return df    
     
 
-    # done
-    def _get_exchange_df(self, metabolite_attribute: str) -> pd.DataFrame: 
-        '''Returns a dataframe that has the attribute speficied by 'metabolite_attribute',
-        for each model and for each metabolite.'''
+    def set_pool_bounds(self, pool_metabolites: dict[str, tuple[Numerical, Numerical]], 
+                        bioCons: Numerical | None = None) -> None:
+        """
+        Changes pool exchange reaction bounds for pool metabolites.
+
+        For each metabolite in "pool_metabolites", the bounds of the corresponding pool exchange reaction
+        (EX_<metabolite_id>) are updated. If a metabolite is not part of the pool a warning is raised and nothing is done.
+        
+        If the metabolite is consumable from the pool (lower bound <= 0) and "bioCons" is provided, the lower bound 
+        of each member's exchange reaction for that metabolite is set to "bioCons", limiting individual consumption
+        independently of the pool availability.
+
+        Parameters
+        ----------
+        pool_metabolites: dict[str, tuple[Numerical, Numerical]]
+            Dictionary mapping metabolite ids (without prefix, e.g. 'glyc_e')
+            to (lower_bound, upper_bound) tuples for the pool exchange reactions.
+
+        bioCons: Numerical or None, optional
+            Lower bound imposed on member exchange reactions when the metabolite
+            can be consumed from the pool. If None, no per-member consumption
+            constraint is applied.
+        """
+        
+        for metabolite_id, metabolite_bounds in pool_metabolites.items():
+            if metabolite_id not in self.exchange_metabolite_info:
+                print(f"Warning: {metabolite_id} is not part of pool metabolites. Skipping.")
+                continue
+
+            # Changing pool exchange reaction bounds
+            reaction_id = f"EX_{metabolite_id}"
+            pool_ex_reaction = cast(Reaction, self.community_model.reactions.get_by_id(reaction_id))
+            pool_ex_reaction.bounds = metabolite_bounds
+
+            # Changing members exchange reaction bounds
+            exchange_metabolite = self.exchange_metabolite_info[metabolite_id]
+
+            for member_info in exchange_metabolite.values():
+                exchange_id = member_info.get('ex_id')
+
+                if exchange_id is None:
+                    continue
+
+                member_ex_reaction = cast(Reaction, self.community_model.reactions.get_by_id(exchange_id))
+
+                if metabolite_bounds[0] <= 0 and bioCons is not None:
+                    member_ex_reaction.lower_bound = bioCons
+        
+
+        self.non_blocked = set()   
+
+
+    def _get_exchange_attribute_df(self, metabolite_attribute: str) -> pd.DataFrame: 
+        """Return a DataFrame with a fixed exchange attribute for each
+        pool metabolite (rows) and each member model (columns). """
 
         assert metabolite_attribute in ['m_id', 'name', 'formula',' charge', 'ex_id', 'bounds']
     
@@ -125,7 +114,85 @@ class EcosystemCommunity():
         df = pd.DataFrame(data=rows, index=sorted_metabolite_indexes, columns=sorted_model_ids)
 
         return df
+
+
+    def set_member_exchange_bounds(self, member_model_id: str, 
+                                   exchange_metabolites: dict[str, tuple[Numerical, Numerical]]) -> None:
+        """Changes member exchange reaction bounds of metabolites in exchange_metabolites.
+        If a metabolite is not part of the exchanges a warning is raised and nothing is done.      
     
+        Parameters
+        ----------
+        member_model_id: str
+            Model id of the community member whose exchange reactions are modified.
+
+        exchange_metabolites: dict[str, tuple[Numerical, Numerical]]
+            Dictionary mapping metabolite ids (without prefix, e.g. 'glyc_e')
+            to (lower_bound, upper_bound) tuples for the exchange reactions.
+        """    
+        exchange_id_df = self._get_exchange_attribute_df('ex_id') # id of member exchange reactions   
+        
+        for metabolite, bounds in exchange_metabolites.keys():
+            if metabolite not in exchange_id_df.index:
+                print(f"No exchange or pool reactions for {metabolite}. Skypping")
+                continue
+
+            reaction_id = exchange_id_df.loc[metabolite, member_model_id]
+            if not isinstance(reaction_id, str):
+                print(f"No exchange reaction for {metabolite} in {member_model_id}. Skypping...")
+                continue
+
+            reaction = cast(Reaction, self.community_model.reactions.get_by_id(reaction_id))
+            reaction.bounds = bounds
+            self.exchange_metabolite_info[metabolite][member_model_id]['bounds'] = bounds
+ 
+
+    # not used currently            
+    def change_reaction_bounds(self, reaction_id: str, 
+                               new_bounds: tuple[Numerical, Numerical]) -> tuple[Numerical, Numerical]:
+        """Changes the bounds of the reaction labeled by "reaction_id". Returns old bounds."""
+        community_model = self.community_model
+        reaction = cast(Reaction, community_model.reactions.get_by_id(reaction_id))
+        old_bounds = reaction.bounds
+        reaction.bounds = new_bounds
+
+        return old_bounds
+
+    
+    # public
+    def set_member_reactions(self) -> None:
+        """Builds a dictionary mapping each member model id to the list of reaction ids belonging to that model.
+
+        Member model ids may contain underscores. Reactions are assigned to the
+        member whose model id is the longest prefix of the reaction id.
+        """
+        member_reactions: dict[str, list[str]] = {model_id: [] for model_id in self.member_model_ids}
+
+        for reaction in self.community_model.reactions:
+            # searches if there are members associated with the reaction
+            matches = [model_id for model_id in self.member_model_ids if reaction.id.startswith(model_id)]
+
+            if not matches:
+                continue
+
+            model_id = max(matches, key=len)
+            member_reactions[model_id].append(reaction.id)
+
+        self.member_reactions = member_reactions         
+        
+
+    def _set_non_blocked_reactions(self) -> None:
+        """Stores all non blocked reactions."""
+
+        blocked = cobra.flux_analysis.find_blocked_reactions(self.community_model)
+        reactions = cast(Iterable[Reaction], self.community_model.reactions)
+        all_ids = [reaction.id for reaction in reactions]
+        non_blocked = set(all_ids).difference(set(blocked))
+        self.non_blocked = non_blocked
+
+
+    # VLP PENDING ===========================================================================================
+
 
     def _to_vlp(self, **kwargs):        
         """Returns a vlp problem from EcosystemModel."""
@@ -166,7 +233,7 @@ class EcosystemCommunity():
         return vlp  
     
 
-    def solve_mo_fba(self, bensolve_opts = None) -> None:
+    def _solve_mo_fba(self, bensolve_opts = None) -> None:
        
         if bensolve_opts is None:
             bensolve_opts = vlpProblem().default_options
@@ -174,37 +241,6 @@ class EcosystemCommunity():
         
         vlp_eco = self._to_vlp(options = bensolve_opts)    
         self.mo_fba_sol = bensolve(vlp_eco)
-
-
-    def change_reaction_bounds(self, rid: str, new_bounds: tuple[int]) -> tuple[int]:
-        community_model = self.community_model
-        rxn = community_model.reactions.get_by_id(rid)
-        old_bounds = rxn.bounds
-        rxn.bounds = new_bounds
-        return old_bounds
-
-    
-    def set_member_reactions(self):
-        member_rxns = {x:[] for x in self.member_model_ids}
-        for r in self.community_model.reactions:
-            for member in self.member_model_ids:
-                if r.id.startswith(member):
-                    member_rxns[member].append(r.id)
-                    break
-
-        self.member_rxns = member_rxns         
-
-
-    def _get_blocked_reactions(self):
-        blocked = cobra.flux_analysis.find_blocked_reactions(self.community_model)
-        return blocked     
-        
-
-    def _set_non_blocked_reactions(self) -> None:
-        blocked = cobra.flux_analysis.find_blocked_reactions(self.community_model)
-        all_ids = [x.id for x in self.community_model.reactions]
-        non_blocked = set(all_ids).difference(set(blocked))
-        self.non_blocked = non_blocked
 
 
     def _get_pareto_front(self) -> np.ndarray:

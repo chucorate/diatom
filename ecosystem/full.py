@@ -4,10 +4,47 @@ from cobra.util.solver import linear_reaction_coefficients
 from ecosystem.base import BaseEcosystem
 from typing import Any, cast
 
-Numerical = int |float
+Numerical = int | float
 
 
 class FullEcosystem(BaseEcosystem):
+    """
+    Community-level metabolic model composed of multiple member models
+    connected through a shared metabolite exchange pool. Has several tools 
+    for community modification and analysis.
+
+    FullEcosystem receives individual COBRA member models, and builds the community from 
+    the ground up.
+
+    Key attributes
+    --------------
+
+    community_member : Model
+        COBRA Model composed of all member models connected through a shared metabolite exchange pool.
+
+    member_model_ids : list[str]
+        Identifiers of the member models in the community.
+
+    objectives : list[dict[str, float]]
+        List encompassing each member model objective function, stored as a dictionary.
+
+    community : EcosystemCommunity
+        Class that handles modification of the community.
+
+    grid : EcosystemGrid
+        Class that builds and modifies the discrete abundance-growth space.
+
+    analyze : EcosystemAnalyze
+        Class that provides tools for feasibility, qualitative and quantitative analysis. 
+
+    clustering : EcosystemClustering
+        Class that holds clustering tools.
+
+    plot : EcosystemPlot
+        Class that holds plotting tools.
+
+    """
+
     def __init__(self, member_models: list[Model], member_model_ids: list[str], 
                  community_name: str = "community", community_id: str = "community",
                  pool_bounds: tuple[Numerical, Numerical] = (-1000,1000), keep_members: bool = True, print_report: bool = True, solver: str = 'gurobi'):
@@ -54,7 +91,7 @@ class FullEcosystem(BaseEcosystem):
     # --------------------------------------------------- step 1 ---------------------------------------------------
 
  
-    def _check_conflicts(self, exchange_metabolite_info: dict[str, dict[str, Any]]) -> None:
+    def _check_conflicts(self, exchange_metabolite_info: dict[str, dict[str, dict[str, Any]]]) -> None:
         '''Checks for inconsistencies in exchanged metabolites among member models and fill missing values in-place'''
         
         conflicts = list()
@@ -107,7 +144,7 @@ class FullEcosystem(BaseEcosystem):
             return
         
         # each metabolite has an entry on this dictionary, which stores another dictionary where its information lies
-        exchange_metabolite_info: dict[str, dict[str, Any]] = dict()
+        exchange_metabolite_info: dict[str, dict[str, dict[str, Any]]] = dict()
 
         # stores all exchange metabolite information on a dictionary
         for index, model in enumerate(self.member_models):
@@ -198,7 +235,9 @@ class FullEcosystem(BaseEcosystem):
 
 
     def _merge_all_models(self, solver: str) -> None:
-        '''Create new cobrapy Model for the community by merging member models. Use one of the members' objective function as default objective for the community model'''
+        '''Merges all member models into the community model.
+        
+        One of the member objective functions is used as the default community model objective.'''
         community_model = self.community_model
         for model in self.member_models:
             community_model.merge(model)
