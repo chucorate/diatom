@@ -191,6 +191,43 @@ class EcosystemCommunity():
         self.non_blocked = non_blocked
 
 
+    def apply_member_fraction_bounds(self, mirror_community_model: Model, member_fractions: np.ndarray) -> None:
+        """
+        Scales reaction bounds according to community member fractions.
+
+        This method updates reaction bounds in the provided community model by scaling each 
+        member's reactions proportionally to its relative abundance in the community.
+
+        IMPORTANT: This method must be called *only* inside a model context
+        manager, e.g.::
+
+            with community_model:
+                community.apply_member_fraction_bounds(community_model, fractions)
+
+        Calling this method outside a `with model:` block will permanently modify
+        reaction bounds and may lead to incorrect cumulative scaling.
+
+        Parameters
+        ----------
+        mirror_community_model : cobra.Model
+            Community model whose reaction bounds will be temporarily modified.
+
+        member_fractions : np.ndarray
+            Relative abundance of each community member. 
+        """
+        # reactions are assign to each community member
+        # community.set_member_reactions()
+        for i, member in enumerate(self.member_model_ids):
+            member_fraction = member_fractions[i]
+            member_reactions = self.member_reactions[member]
+           
+            # reaction bounds are updated, accounting for members fractions in the community 
+            for reaction_id in member_reactions:
+                reaction = cast(Reaction, mirror_community_model.reactions.get_by_id(reaction_id))
+                old_bounds = reaction.bounds
+                reaction.bounds = (old_bounds[0] * member_fraction, old_bounds[1] * member_fraction)
+
+
     # VLP PENDING ===========================================================================================
 
 

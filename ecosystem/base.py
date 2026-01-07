@@ -29,7 +29,7 @@ class BaseEcosystem():
         
     def _build_modules(self):
         self.community = EcosystemCommunity(self)
-        self.grid = EcosystemGrid(self, points = None, feasible_points = None, pfractions = None, grid_step = None)
+        self.grid = EcosystemGrid(self)
         self.analyze = EcosystemAnalyze(self)
         self.plot = EcosystemPlot(self)
         self.clustering = EcosystemClustering(self)

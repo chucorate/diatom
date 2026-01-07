@@ -1,4 +1,6 @@
 import numpy as np
+from numpy.typing import NDArray
+
 from functools import reduce
 from typing import Any, TYPE_CHECKING
 
@@ -7,87 +9,110 @@ if TYPE_CHECKING:
 
 
 class EcosystemGrid():
-    def __init__(self, base_ecosystem: "BaseEcosystem", points, feasible_points, pfractions, grid_step):
+    def __init__(self, base_ecosystem: "BaseEcosystem"):
         self.ecosystem = base_ecosystem
 
-        self.points = points
-        self.feasible_points = feasible_points
-        self.pfractions = pfractions
+        self.points: NDArray[np.floating] = np.array([]) # shape: (numPoints**2, 2)
+        self.feasible_points: NDArray[np.floating] = np.array([])
+        self.member_fractions: NDArray[np.floating] = np.array([])
 
-        self.step = grid_step
-        self.limits: tuple = tuple()
+        self.step: int = 0
+        self.limits: tuple[NDArray, NDArray] = (np.array([]),np.array([]))
         
+
     @property
-    def member_model_ids(self):
+    def member_model_ids(self) -> list[str]:
         return self.ecosystem.member_model_ids
     
+
     @property
-    def size(self):
+    def size(self) -> int:
         return self.ecosystem.size
 
 
     # GRID CONSTRUCTION =======================================================================
 
+          
+    def build_grid(self, numPoints: int, drop_zero: bool = False, relax_constraints: bool = False) -> None:
+        """Builds a uniform abundance-growth space grid.
+        
+        The grid is generated from 0 to 1 at the first dimension, and from 0 to the maximum value
+        the objective function at the second dimension. The point (0,0) can be dropped, and positive
+        lower bounds can be temporarily relaxed to 0, in order to increase the maximum objective value.
 
-    # distinto, se agrega ignore_maint, los comentarios son distintos            
-    def build_grid(self, numPoints: int = 10, drop_zero: bool = True, ignore_maint: bool = True) -> None:
-                
-        #compute max_com by relaxing constraints such as ATPM
+        Assumes the model objective function is community growth, and hardcodes the grid to be
+        two dimensional.
+
+        Parameters
+        ----------
+        numPoints: int
+            Number of points along each dimension.
+        
+        drop_zero: bool, optional
+            If True, drops the first point of the grid. Defaults to False.
+
+        relax_constraints: bool, optional
+            If True, all positive lower bounds for each reaction are set temporarily to 0
+            in order to compute the maximum objective value of the model. Defaults to False.
+        """
         with self.ecosystem.community_model as community_model:
-            if ignore_maint:
-                for rxn in community_model.reactions:
-                    if rxn.lower_bound > 0:
-                        rxn.lower_bound = 0
+            # compute max_objective_value by relaxing constraints such as ATPm
+            if relax_constraints:
+                for reaction in community_model.reactions:
+                    if reaction.lower_bound > 0:
+                        reaction.lower_bound = 0
             
-            max_com: float = community_model.slim_optimize()
+            max_objective_value = community_model.slim_optimize()
 
-        maxs = [1, max_com]
-        print(f'Maximum community: {max_com}')
-        mins = [0, 0] #hardcoded 2D 
         size = self.size
+        assert size == 2 # hardcoded 2D 
+
+        mins = np.array([0.0, 0.0]) 
+        maxs = np.array([1.0, max_objective_value])
+        print(f'Maximum community: {max_objective_value}')
         
-        #Modify this to have a matrix of nxn points rather than a step (using com_growth and fraction as axis)
-        #alternative: define a different step based on points to have
+        # builds 1D slices
         slices = [np.linspace(mins[i], maxs[i], numPoints) for i in range(size)]
-        #slices = [slice(mins[i],maxs[i],step) for i in range(size)]
-        #rgrid = np.mgrid[slices]
 
-        print(f"slice 0: {slices[0]}")
-        print(f"slice 1: {slices[1]}")
-
-        rgrid = np.array(np.meshgrid(slices[0], slices[1]))#.T.reshape() #NJ
-        print(rgrid, type(rgrid))
-        #rgrid2columns = [rgrid[i,:].ravel() for i in range(size)]
-        rgrid2columns = [rgrid[i,:].ravel() for i in range(size)]
-        # array of grid points (x,y,z,...)
-        points = np.column_stack(rgrid2columns)
-        print(f"points type: {type(points)}")
+        # builds 2D grid
+        X, Y = np.meshgrid(slices[0], slices[1], indexing='ij') #.T.reshape() #NJ
+        grid_points = np.column_stack([X.ravel(), Y.ravel()]) # shape: (numPoints**2, 2)
+        print(f"points shape: {grid_points.shape}")
      
+        # skips first point if true
         if drop_zero:
-            points = points[1:]
-            mins   = np.min(points, axis=0)
-            maxs   = np.max(points, axis=0)
+            grid_points = grid_points[1:]
+            mins = np.asarray(np.min(grid_points, axis=0))
+            maxs = np.asarray(np.max(grid_points, axis=0))
         
-        self.points  = points
-        self.limits  = (mins, maxs)
+        self.points = grid_points
+        self.limits = (mins, maxs)
 
 
-    def set_points_distribution(self, prange = None):
-        
+    def set_member_fractions(self, points_range: np.ndarray | None = None):
+        """Builds population fraction distributions from the grid points.
+
+        Each grid point is assumed to be of the form (f_1, com_u), where f_1 represents
+        the fraction of the first organism in a two-organism community. The fraction of
+        the second organism is computed as 1 - f_1.
+
+        Optionally, a subset of grid points can be selected using a mask or index array.
+
+        Parameters
+        ----------
+        points_range : np.ndarray or None, optional
+            Boolean mask or index array used to select a subset of grid points.
+            If None, all grid points are used.
+        """
         if self.points is None:
             raise RuntimeError('Grid points are not set yet!')
             
         points = self.points
-        #NJ new grid
-        #points[0]: f_i
-        #points[1]: com_u
+        if points_range is not None:
+            points = points[points_range]
         
-        if prange is not None:
-            points = points[prange]
-        
-        #com_mu = np.sum(points,axis =1)
-        #pfractions = np.apply_along_axis(lambda a, b : a/b, 0, points, com_mu)     
-        self.pfractions = np.array([[p[0], 1-p[0]] for p in points]) #assuming two organisms
+        # for each point, selects the fraction of organism 1 (p[0]), and computes the fraction of organism 2
+        self.member_fractions = np.array([[p[0], 1-p[0]] for p in points]) 
             
 
     def get_2D_slice(self, model_ids: list, fixed_values: list): #NJ DELETE THIS FUNCTION
@@ -166,19 +191,20 @@ class EcosystemGrid():
 
     def get_slice_points(self, full_slice_indexes, free_member_indexes):
 
-        if self.feasible_points is not None: 
-            feasible_indexes    = np.where(self.feasible_points)[0]
-            feasible_points     = self.points[feasible_indexes]
-            feasible_pfractions = self.pfractions[feasible_indexes]
-                
-            slice_indexes    = np.isin(feasible_indexes, full_slice_indexes)
-            slice_points     = feasible_points[slice_indexes,:][:,free_member_indexes]  
-            slice_pfractions = feasible_pfractions
-
-        else:
+        if self.feasible_points.size == 0: 
             slice_indexes    = full_slice_indexes
             slice_points     = self.points[full_slice_indexes,:][:,free_member_indexes] 
-            slice_pfractions = self.pfractions[full_slice_indexes]
+            slice_pfractions = self.member_fractions[full_slice_indexes]
+
+            return slice_points, slice_pfractions, slice_indexes
+
+        feasible_indexes    = np.where(self.feasible_points)[0]
+        feasible_points     = self.points[feasible_indexes]
+        feasible_pfractions = self.member_fractions[feasible_indexes]
+                
+        slice_indexes    = np.isin(feasible_indexes, full_slice_indexes)
+        slice_points     = feasible_points[slice_indexes,:][:,free_member_indexes]  
+        slice_pfractions = feasible_pfractions
             
         return slice_points, slice_pfractions, slice_indexes
     
@@ -186,7 +212,7 @@ class EcosystemGrid():
     def _calculate_community_growth(self, feasible=False): #NJ DELETE THIS FUNCTION
         cgrowth = np.sum(self.points,axis=1) 
         if feasible:
-            if self.feasible_points is None:
+            if self.feasible_points.size == 0:
                 print('feasible points have not been previously established! Returning values for all points')
             else:
                 cgrowth = cgrowth[self.feasible_points]
@@ -235,7 +261,7 @@ class EcosystemGrid():
                 cpoints = np.diag(max_vals)
                 to_check = cpoints[givers_or_needy_indexes,:]
                 
-                are_feasible = self.ecosystem.analyze.check_feasible(to_check)
+                are_feasible = self.ecosystem.analyze._feasibility_analysis(to_check)
                 
                 ev = to_check[are_feasible, :] 
 

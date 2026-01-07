@@ -1,29 +1,47 @@
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 
 from cobra.flux_analysis import flux_variability_analysis
 from cobra.util.array import create_stoichiometric_matrix
 from cobra.io.mat import _cell
+from cobra import Reaction
 
 import copy
 import scipy.io as sio
 from collections import OrderedDict
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from ecosystem.base import BaseEcosystem
 
 
-class EcosystemAnalize():
+qualitative_dict = {
+    -3.0: '-', 
+    -2.0: '--',
+    -1.0: '-0',
+    0.0: '0',
+    1.0: '0+',
+    2.0: '++',
+    3.0: '+',
+    4.0: '-+',
+    5.0: 'err',
+    100.0: 'var'
+    }
+
+
+class EcosystemAnalyze():
     def __init__(self, base_ecosystem: "BaseEcosystem"):
         self.ecosystem = base_ecosystem  # parent class
         self.qual_vector_df = None # public
-        self.rxn2cluster = None
+        self.rxn2cluster: list[str] | None = None # public
         self.fva_results = None
         self.qFCA = None
+        self.qualitative_dict: dict[float, str] = qualitative_dict
 
-        self.coupled_rxns    = {model_id: None for model_id in self.ecosystem.member_model_ids}      
-        self.member_blocked  = {model_id: None for model_id in self.ecosystem.member_model_ids}
+        self.coupled_rxns: dict[str, dict] = {}      
+        self.member_blocked: dict[str, list]  = {}
+
 
     @property
     def member_model_ids(self):
@@ -33,46 +51,157 @@ class EcosystemAnalize():
     # CUALITATIVE ANALYSIS
 
     
-    def set_cluster_reactions(self):
+    def select_reactions_for_clustering(self) -> None:
+        """Selects the set of community reactions to be used for FVA and clustering analyses.
+
+        This method determines which reactions of the community model should be
+        considered for analysis based on the availability of FCA results for all
+        member models.
+
+        If FCA results are missing for at least one member model, all non-blocked community 
+        reactions are selected.
+
+        If FCA results are available for all member models:
+        - Blocked reactions in any member are excluded.
+        - For each fully coupled reaction set, only one representative reaction is selected.
+        - Reactions not accounted for by member models (e.g. pool or exchange reactions) are also included.
+        
+        Notes
+        -----
+        - This method assumes that FCA results, when available, have been previously
+        stored using `store_fca_results`.
+        - Pool bounds and community structure must be set before calling this method.
+        - The method does not modify the community model; it only selects a subset
+        of reactions for analysis.
+        """
         community = self.ecosystem.community
-
-        # if FCA has been performed and results stored for all members, reactions for fva and clustering are reduced accordingly.
-        # Otherwise, non-blocked reactions are obtained and ALL those reactions are used.       
-        coupled_dicts =  list(self.coupled_rxns.values())
-              
-        if coupled_dicts.count(None) != 0: # at least one member without FCA results       
-            print("Missing FCA results")
-            print("Using non-blocked reactions only")
+        missing_models = set(self.member_model_ids) - set(self.coupled_rxns.keys())
+    
+        if missing_models: # FCA results are incomplete. Non-blocked reactions are obtained and ALL those reactions are used.        
+            print(f"Missing FCA results for: {missing_models}.\nUsing non-blocked reactions only.")
             community._set_non_blocked_reactions()  
-            rxn2cluster = list(community.non_blocked)  
-            #rxn2cluster = [r.id for r in self.cmodel.reactions]
 
-        else:      
-            accounted = []      
-            coupled_rep = []
+            rxn2cluster = list(community.non_blocked)  
+            rxn2cluster.sort()
+            self.rxn2cluster = rxn2cluster
+
+            print("Total reactions considered for fva and clustering: %d" % len(self.rxn2cluster))
+            return
+
+        # Otherwise, FCA results are available for all members, reactions for fva and clustering are reduced accordingly.
+        accounted = []      
+        coupled_rep = []
               
-            # blocked reactions are not considered for fva and clustering   
-            for model_id in self.member_blocked:
-                blocked = self.member_blocked[model_id]
-                accounted = accounted + blocked
+        # blocked reactions are not considered for fva and clustering   
+        for blocked in self.member_blocked.values():
+            accounted += blocked
               
-            # Only one reaction from each fully coupled set is used for fva and clustering      
-            for model_id in self.coupled_rxns:
-                coupled_sets_dict = self.coupled_rxns[model_id]
-                # rxn representative for coupled set:   
-                coupled_rep  = coupled_rep + list(coupled_sets_dict.keys())
-                coupled_sets = list(coupled_sets_dict.values())
-                accounted = accounted + [rxn for cset in coupled_sets for rxn in cset]
+        # Only one reaction from each fully coupled set is used for fva and clustering      
+        for coupled_sets_dict in self.coupled_rxns.values():
+            # reaction representative for coupled set:   
+            coupled_rep += list(coupled_sets_dict.keys())
+            coupled_sets = list(coupled_sets_dict.values())
+            accounted += [reaction for cset in coupled_sets for reaction in cset]
         
-            # Reactions for fva and clustering are those representing coupled sets and those not in any member (pool reactions)                   
-            all_rids = [r.id for r in self.ecosystem.community_model.reactions]
-            missing = set(all_rids).difference(set(accounted))
+        # Reactions for fva and clustering are those representing coupled sets and those not in any member (pool reactions)                   
+        all_reaction_ids = [reaction.id for reaction in self.ecosystem.community_model.reactions]
+        missing_reactions = set(all_reaction_ids).difference(set(accounted))
         
-            rxn2cluster = list(missing) + coupled_rep       
-        
+        rxn2cluster = list(missing_reactions) + coupled_rep       
         rxn2cluster.sort()
-        self.rxn2cluster =  rxn2cluster
+        self.rxn2cluster = rxn2cluster
+
         print("Total reactions considered for fva and clustering: %d" % len(self.rxn2cluster))
+
+
+    def analyze_grid(self, analysis: str = 'feasibility', update_bounds: bool = True, **kwargs) -> None:
+        """
+        Run an analysis over the full ecosystem grid.
+
+        Updates attributes of `self.ecosystem.grid` and/or:
+            - self.ecosystem.grid.feasible_points
+            - self.qual_vector_df
+            - self.fva_results
+
+        Parameters
+        ----------
+        analysis : {'feasibility', 'qual_fva'}, default='feasibility'
+            Type of analysis to run on full grid.
+            - 'feasibility': checks if each grid point is feasible considering member fractions.
+            - 'qual_fva'   : computes qualitative flux vectors and FVA results. If feasible 
+            points are stored, analysis is run on those points only. FVA results are also stored.  
+
+        update_bounds : bool, default=True
+            Whether reaction bounds should be updated using member fractions
+            at each grid point.
+
+        **kwargs :
+            Additional keyword arguments passed to the underlying analysis
+            routines.
+        """
+        # calculate member fractions for each grid point if they are not stored
+        if self.ecosystem.grid.member_fractions.size == 0:
+            self.ecosystem.grid.set_member_fractions()
+        
+        # run analysis
+        if analysis == 'feasibility':
+            self._feasibility_analysis(update_bounds=update_bounds, **kwargs)
+            
+        elif analysis == 'qual_fva':
+            self._qualitative_analysys(update_bounds=update_bounds, **kwargs)   
+
+        else:
+            raise ValueError(f"Non valid analysis option: {analysis}") 
+
+           
+    def _feasibility_analysis(self, update_bounds: bool = False, **kwargs) -> None:
+        #step 2: run feasibility analysis for all grid points  
+        point_array            = self.ecosystem.grid.points               
+        member_fractions_array = self.ecosystem.grid.member_fractions
+        n_points               = point_array.shape[0]
+        n_frac                 = member_fractions_array.shape[0]
+
+        if not update_bounds:
+            feasibility_mask = [self._analyze_point(grid_point, None, analysis='feasibility', 
+                                                    update_bounds=False, **kwargs) for grid_point in point_array] 
+            
+        else:
+            if member_fractions_array.size == 0 or n_points != n_frac:
+                raise RuntimeError("Missing or incomplete member fractions array. Cannot update reaction bounds!") 
+              
+            feasibility_mask = [self._analyze_point(point_array[i], member_fractions_array[i], 
+                                                    analysis='feasibility', update_bounds=True, **kwargs)
+                                                    for i in range(n_points)] 
+            
+        self.ecosystem.grid.feasible_points = np.array(feasibility_mask)
+        
+        n_feasible = sum(self.ecosystem.grid.feasible_points)
+        print(f"grid feasible points: {n_feasible}/{n_points}")
+
+
+    def _qualitative_analysys(self, update_bounds: bool = False, **kwargs) -> None:
+        point_array            = self.ecosystem.grid.points               
+        member_fractions_array = self.ecosystem.grid.member_fractions
+        feasible_points        = self.ecosystem.grid.feasible_points
+
+        if feasible_points is None:
+            print("Warning: Feasible points have not been calculated. Running qualitative fva over full grid")
+            df_index = np.arange(point_array.shape[0])
+        else:
+            print("Running qualitative fva over grid feasible points...")
+            point_array = point_array[feasible_points,:]    
+            member_fractions_array = member_fractions_array[feasible_points,:]     
+            df_index =  np.where(feasible_points)[0]
+        
+        rtuples = self.calculate_qual_vectors(point_array,member_fractions_array,update_bounds=update_bounds, **kwargs)
+            
+        qual_vector_list, fva_results =  map(list, zip(*rtuples))    
+        self.qual_vector_df = pd.DataFrame(np.array(qual_vector_list),columns = self.rxn2cluster, index=df_index)
+            
+        fva_results = np.dstack(fva_results)
+        fva_results = np.rollaxis(fva_results,-1)
+            
+        self.fva_results = fva_results  
 
 
     def calculate_qual_vectors(self,point_array, pfraction_array=None, update_bounds=False, **kwargs):
@@ -80,7 +209,7 @@ class EcosystemAnalize():
         # Check for reactions selected for FVA and clustering
         if self.rxn2cluster is None:
             print("No reactions previously selected for FVA and clustering!\nSetting reactions to cluster...")
-            self.set_cluster_reactions()        
+            self.select_reactions_for_clustering()        
         
         if not update_bounds:
             print("Warning:Calculating qualitative vectors without updating reaction bounds!")
@@ -99,24 +228,102 @@ class EcosystemAnalize():
         return r
     
 
-    def check_feasible(self, point_array, pfraction_array=None, update_bounds=False, **kwargs):
-        if not update_bounds:
-            r = [self._analyze_point((p,None), analysis = 'feasibility', update_bounds=False, **kwargs) for p in point_array] 
-            
-        else:
-            npoints = point_array.shape[0]
-            nfrac   = pfraction_array.shape[0]
-            if pfraction_array is None or npoints != nfrac:
-                raise RuntimeError("Missing or incomplete member fractions array. Cannot update rxn bounds!!") 
-            else:
-                coord_frac = [(point_array[ix],pfraction_array[ix]) for ix in range(npoints)]    
-                r = [self._analyze_point(x, analysis = 'feasibility', update_bounds = True, **kwargs) for x in coord_frac] 
-            
-        return r
+    # ================================================================== ANALYZE POINT ==================================================================
 
 
-    def _analyze_point(self, ptuple, analysis = 'feasibility', update_bounds = False, delta = 1e-9):
+    @staticmethod
+    def _qual_translate(interval: pd.DataFrame, delta: float = 1e-4) -> float:
+        """
+        Translate FVA min/max values into qualitative states. Outputs the numeric value that maps
+        to the qualitative state in `self.qualitative_dict`.
+        """
+        fmax, fmin = float(interval.maximum.item()), float(interval.minimum.item())
+
+        same_value = abs(fmax - fmin) < delta
+        pos_max = fmax > delta
+        neg_max = fmax < -delta
+        pos_min = fmin > delta
+        neg_min = fmin < -delta
+        zero_max = abs(fmax) <= delta
+        zero_min = abs(fmin) <= delta
+
+        rules = [
+            (lambda: neg_min and neg_max and same_value, -3.0),
+            (lambda: neg_min and neg_max, -2.0),
+            (lambda: neg_min and zero_max, -1.0),
+            (lambda: zero_min and zero_max, 0.0),
+            (lambda: zero_min and pos_max, 1.0),
+            (lambda: pos_min and pos_max, 2.0),
+            (lambda: pos_min and pos_max and same_value, 3.0),
+            (lambda: neg_min and pos_max, 4.0)
+        ]
+
+        for rule, qualitative_value in rules:
+            if rule():
+                return qualitative_value
+
+        # no qualitative state could be determined. Check qualitative_dict for conversions
+        return 5.0
         
+
+    def _analyze_point(self, grid_point: np.ndarray, member_fractions: np.ndarray | None, 
+                       analysis: str = 'feasibility', update_bounds: bool = False, delta: float = 1e-9) -> bool | tuple:
+        """Analyze a single grid point of the ecosystem parameter space.
+
+        This method evaluates either the feasibility of a grid point or computes
+        qualitative flux variability information, optionally updating reaction
+        bounds according to community member fractions.
+
+        Parameters
+        ----------
+        grid_point : np.ndarray, shape (2,)
+            Grid coordinates defining the community state. The first coordinate corresponds to the 
+            fraction of total biomass growth assigned to member 1, and the second coordinate corresponds 
+            to the total community biomass production rate.
+
+            Internally, this is transformed into per-member biomass growth rates:
+                mu_1 = fraction * mu_total
+                mu_2 = (1 - fraction) * mu_total
+
+        member_fractions : np.ndarray or None, shape (n_members,)
+            Relative abundance of each community member. These fractions are used to scale reaction 
+            bounds when `update_bounds=True`. If all entries are NaN, they are interpreted as zero 
+            to avoid invalid bound updates.
+
+            This argument is ignored when `update_bounds=False`.
+
+        analysis : {"feasibility", "qual_fva"}, default="feasibility"
+            Type of analysis to perform:
+            - "feasibility": checks whether the grid point admits a feasible solution.
+            - "qual_fva": computes qualitative flux variability categories for a selected set of reactions.
+
+        update_bounds : bool, default=False
+            If True, reaction bounds are scaled according to member fractions before running the analysis. 
+            Bound updates are temporary and must be executed inside the model context manager.
+
+        delta : float, default=1e-9
+            Numerical tolerance used when translating flux variability ranges into
+            qualitative categories. Only relevant for `analysis="qual_fva"`.
+
+        Returns
+        -------
+        bool
+            If `analysis="feasibility"`, returns True if the grid point is feasible,
+            False otherwise.
+
+        tuple
+            If `analysis="qual_fva"`, returns a tuple `(qual_vector, fva_values)`:
+            - qual_vector : list[int]
+                Qualitative category assigned to each reaction.
+            - fva_values : np.ndarray, shape (n_reactions, 2)
+                Minimum and maximum flux values obtained from FVA.
+
+        Notes
+        -----
+        All model mutations (reaction bound updates and objective fixing) are performed inside a 
+        `with community_model:` context. This guarantees that all changes are reverted after the 
+        analysis is completed.
+        """
         # ptuple: tuple of two arrays:   (0) Grid point coordinates; 
         #                                (1) grid point member fractions; grid point
         # analysis: type of analysis to run. Options:
@@ -132,94 +339,50 @@ class EcosystemAnalize():
         #  boolean indicating point feasibility ('feasibility' analysis) or  ('qual_val' analysis)
         #  a tuple where the first element is a list of rxns qualitative values for the analyzed grid point
         #  and the second is an array with the corresponding fva results
-        def qual_translate(x, delta = 1e-4):
-            fvaMax = x.maximum
-            fvaMin = x.minimum
-           
-            #3 fixed on positive value
-             #-3 fixed on negative value
-             
-            # -2: max and min <0
-            if fvaMax < -delta and fvaMin < -delta:
-                ret = -2
-                if abs(fvaMax-fvaMin) < delta:
-                    ret = -3
-            # 0: max and min == 0
-            elif (fvaMax >= -delta and fvaMax <=delta) and (fvaMin >=-delta and fvaMin <=delta):
-                ret = 0
-            # -1: max and min <=0
-            elif (fvaMax>= -delta and fvaMax < delta) and (fvaMin < -delta):
-                ret = -1
-            # 1: max and min >= 0
-            elif (fvaMin >=-delta and fvaMin <=delta) and fvaMax >delta:
-                ret = 1
-            # 2: max and min >0
-            elif (fvaMax >delta and fvaMin > delta):
-                ret = 2
-                if abs(fvaMax - fvaMin) < delta:
-                    ret = 3
-            elif (fvaMin < -delta and fvaMax > delta):
-                ret = 4 #reversible
-            else:
-                ret = 5 #nans            
-         
-            return ret          
-        
-        # 0,0+,0-,++,--,+,-,+-,*
-        
         community_model = self.ecosystem.community_model
-        community = self.ecosystem.community
 
-        point = ptuple[0] #grid point coordinates
-        print(point)
-        point = [point[0]*point[1], (1-point[0])*point[1]]#equivalent of old point 
-        pfrac = ptuple[1] #grid point member fraction
-            
-        out = None
+        print(f"point: {grid_point}, frac: {member_fractions}")
+
+        fraction, mu_total = grid_point
+        member_mu = [fraction*mu_total, (1-fraction)*mu_total] 
+
         
         with community_model:
-           # update member reactions bounds if required:
-           if update_bounds: 
+            # update member reactions bounds if required:
+            if update_bounds: 
+                if not isinstance(member_fractions, np.ndarray):
+                    raise TypeError("member_fractions must be a numpy array")
+                
                 print('updating reaction bounds ...')
-                # In the case that all objectives are zero, all member fractions are nan
-                # Here we set fractions to zero to avoid errors setting bounds
-                if np.all(np.isnan(pfrac)): 
-                    pfrac = np.array([0.0]*pfrac.size)                
-                    
-                # reactions are assign to each community member
-                community.set_member_reactions()
-                for i, member in enumerate(self.member_model_ids):
-                    mfrac = pfrac[i]
-                    mrxns = community.member_rxns[member]
-           
-                    # rxn bounds are updated, accounting for members fractions in the community 
-                    
-                    for rid in mrxns:
-                        r = community_model.reactions.get_by_id(rid)
-                        old_bounds = r.bounds
-                        r.bounds =(old_bounds[0] * mfrac, old_bounds[1] * mfrac)
 
-           # fix member objectives to grid point value:
-           for ix, member_objectives in enumerate(self.ecosystem.objectives):    
+                # here we set fractions to zero to avoid errors setting bounds
+                if np.all(np.isnan(member_fractions)): 
+                    member_fractions = np.array([0.0]*member_fractions.size)                
+                    
+                self.ecosystem.community.apply_member_fraction_bounds(community_model, member_fractions)
+
+
+            # fix member objectives to grid point value:
+            for index, member_objectives in enumerate(self.ecosystem.objectives):    
                 if len(member_objectives) != 1:
                     raise RuntimeError("Warning: More than one reaction in %s objective function. Not supported!!" 
-                      % self.member_model_ids[ix])        
+                      % self.member_model_ids[index])        
                 #new bounds for member ix objective function reaction:
-                new_bounds = (point[ix],point[ix])    
+                new_bounds = (member_mu[index], member_mu[index])    
                 #newGrid NJ
                 #print(point[ix])
 
             
                 #change bounds for each objective reaction
-                for rid in member_objectives.keys(): # member_objectives should be single key dictionary
-                    rxn = community_model.reactions.get_by_id(rid)
+                for reaction_id in member_objectives.keys(): # member_objectives should be single key dictionary
+                    rxn = community_model.reactions.get_by_id(reaction_id)
                     rxn.bounds = new_bounds
 
                     #set one of objective reactions as community objective
                     #cmodel.objective = rid #commented since the model comes with an objective
             
            
-           if analysis == 'feasibility': 
+            if analysis == 'feasibility': 
                 #check point feasibility
                 error_value = -1000
                 ob = community_model.slim_optimize(error_value = error_value)  
@@ -228,14 +391,16 @@ class EcosystemAnalize():
                     print('unfeasible point')
                 else:
                     out = True
+
+                return out
         
-           elif analysis == 'qual_fva':  # here we assume the point is feasible      
+            elif analysis == 'qual_fva':  # here we assume the point is feasible      
 
                 if self.rxn2cluster is None:
                     raise RuntimeError('No reactions selected for fva and clustering!')
                     
                 print("running FVA on grid point...")
-                print(ptuple)
+                print((grid_point, member_fractions))
                 
                 rxn_fva = flux_variability_analysis(community_model, reaction_list= self.rxn2cluster)
                 
@@ -243,63 +408,14 @@ class EcosystemAnalize():
                                                          # same order as rxn2cluster
                     
                 print("translating to qualitative vector..")
-                out = (list(rxn_fva.apply(qual_translate, axis = 1, delta = delta)), #qual_vector 
+                out = (list(rxn_fva.apply(self._qual_translate, axis = 1, delta = delta)), #qual_vector 
                              rxn_fva.values) # array with FVA results  
                 
-        return out      
-        
+                return out 
 
-    def analyze_grid(self, analysis = 'feasibility', update_bounds=True, **kwargs):
-        #analysis: type of analysis to run on full grid:
-        #   Options:         
-        #       feasibility = checks if each grid point is feasible considering member fractions
-        #       qual_fva = calculates qualitative vectors for each point in the grid. If feasible 
-        #                  points are stored, analysis is run on those points only.   
-        #                  FVA results are also stored.   
-        
-        #step 1: # calculate community distribution (member fractions) for each grid point 
-                 # if they are not stored
-        if self.ecosystem.grid.pfractions is None:
-            self.ecosystem.grid.set_points_distribution()
-        
-        point_array     = self.ecosystem.grid.points               
-        pfraction_array = self.ecosystem.grid.pfractions
-        
-        #Option 'feasibility':
-        if analysis == 'feasibility':
-                
-            #step 2: run feasibility analysis for all grid points
-            npoints = point_array.shape[0]       
-            self.ecosystem.grid.feasible_points = self.check_feasible(point_array, pfraction_array, 
-                                                       update_bounds=update_bounds, **kwargs)
-            
-            npoints = point_array.shape[0]
-            nfeasible = sum(self.ecosystem.grid.feasible_points)
-            print("grid feasible points: %d / %d" % (nfeasible, npoints))
-            
-        elif analysis == 'qual_fva':
-                
-            #step 2: check for previously calculated feasible points  
-            feasible_points = self.ecosystem.grid.feasible_points
-            if feasible_points is None:
-                print("Warning: Feasible points have not been calculated. Running qualitative fva over full grid")
-                df_index = np.arange(point_array.shape[0])
             else:
-                print("Running qualitative fva over grid feasible points...")
-                point_array = point_array[feasible_points,:]    
-                pfraction_array = pfraction_array[feasible_points,:]     
-                df_index =  np.where(feasible_points)[0]
+                raise ValueError(f"Non valid analysis option: {analysis}")     
         
-            rtuples = self.calculate_qual_vectors(point_array,pfraction_array,update_bounds=update_bounds, **kwargs)
-            
-            qual_vector_list, fva_results =  map(list, zip(*rtuples))    
-            self.qual_vector_df = pd.DataFrame(np.array(qual_vector_list),columns = self.rxn2cluster, index=df_index)
-            
-            fva_results = np.dstack(fva_results)
-            fva_results = np.rollaxis(fva_results,-1)
-            
-            self.fva_results = fva_results  
-
 
     # QUANTITATIVE GRID ANALYSIS
 
@@ -356,10 +472,10 @@ class EcosystemAnalize():
             #update bounds
             for i, member in enumerate(self.member_model_ids):
                 mfrac = this_point_frac[i]
-                mrxns = eco.community.member_rxns[member]
+                mrxns = eco.community.member_reactions[member]
 
                 for rid in mrxns:
-                    r = community_model.reactions.get_by_id(rid)
+                    r = cast(Reaction, community_model.reactions.get_by_id(rid))
                     old_bounds = r.bounds
                     r.bounds = (old_bounds[0]*mfrac, old_bounds[1]*mfrac)
 

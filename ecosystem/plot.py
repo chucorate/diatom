@@ -43,14 +43,10 @@ class EcosystemPlot():
     @property
     def points(self):
         return self.ecosystem.grid.points
-    
-    @property
-    def feasible_points(self):
-        return self.ecosystem.grid.feasible_points
-    
+
     @property
     def pfractions(self):
-        return self.ecosystem.grid.pfractions
+        return self.ecosystem.grid.member_fractions
     
 
     # =================================================================== PLOTTING ===================================================================
@@ -167,10 +163,12 @@ class EcosystemPlot():
 
 
     def _feasible_plot(self, full_slice_indexes, full_slice_points, plot_settings: PlotSettings):
-        if self.feasible_points is None:
+        feasible_points = self.ecosystem.grid.feasible_points
+        
+        if feasible_points.size == 0:
             raise RuntimeError('Points feasibility analysis has not been run! Required for plot!')
                  
-        aux = np.array(self.feasible_points)[full_slice_indexes]
+        aux = np.array(feasible_points)[full_slice_indexes]
         slice_colors = aux + 1
         k = 2
         color_labels = ['','unfeasible', 'feasible']
