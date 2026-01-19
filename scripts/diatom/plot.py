@@ -17,7 +17,7 @@ class DiatomPlot():
 
 
     def plot_sampled_polytope(self, show_boundary: bool = True, show_points: bool = True,
-        s: float = 5.0, alpha: float = 0.6) -> None:
+        s: float = 10.0, alpha: float = 0.6) -> None:
         grid = self.diatom.grid
         analyze = self.diatom.analyze
 
@@ -33,7 +33,7 @@ class DiatomPlot():
         if show_boundary:
             assert isinstance(poly, Polygon)
             x, y = poly.exterior.xy
-            ax.plot(x, y, linewidth=2)
+            ax.plot(x, y, linewidth=1, linestyle="dashed")
   
         # --- Puntos sampleados ---
         if show_points and points.size > 0:

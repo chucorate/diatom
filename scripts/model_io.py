@@ -54,16 +54,17 @@ class ModelIO():
         return self.modelclass.grid.points_per_axis
     
 
-    def coordinates_to_index(self, grid_point: np.ndarray) -> tuple[int, int]:
-        Lx, Ly = self.grid_dimensions
-        assert Lx > 0 and Ly > 0
-
-        x, y = grid_point
-        i = round((self.points_per_axis[0]-1) / Lx * x)
-        j = round((self.points_per_axis[1]-1) / Ly * y)
-
-        return i, j
+    @staticmethod
+    def _format_coord(x: float) -> str:
+        # Convierte el float a string válido para nombre de archivo, con precisión fija
+        return f"{round(x, 6):.6f}".replace('.', 'p').replace('-', 'm')
     
+
+    def coordinates_to_filename(self, grid_point: np.ndarray) -> str:
+        x_str = self._format_coord(grid_point[0])
+        y_str = self._format_coord(grid_point[1])
+        return f"x_{x_str}_y_{y_str}.pkl"
+
 
     def get_directory(self, grid_point: np.ndarray, analysis: Literal["feasibility", "qual_fva"]) -> Path:
         model_name = self.model_name
@@ -71,16 +72,13 @@ class ModelIO():
         Lx, Ly = self.grid_dimensions
         grid_dim = f"Lx_{Lx:.4f}_Ly_{Ly:.4f}"
 
-        i, j = self.coordinates_to_index(grid_point)
-        filename = f"{analysis}_{self.points_per_axis}_i_{i}_j_{j}.pkl"
-        points_per_axis = f"N_{self.points_per_axis}"
+        filename = f"{analysis}_{self.coordinates_to_filename(grid_point)}"
 
-        directory = Path(SAVE_POINTS_DIR) / model_name / grid_dim / points_per_axis / analysis
+        directory = Path(SAVE_POINTS_DIR) / model_name / grid_dim / analysis
         directory.mkdir(parents=True, exist_ok=True) 
 
         if self.directory is None:
-            self.directory = Path(SAVE_POINTS_DIR) / model_name / grid_dim / points_per_axis
-        
+            self.directory = Path(SAVE_POINTS_DIR) / model_name / grid_dim 
 
         return directory / filename
     
