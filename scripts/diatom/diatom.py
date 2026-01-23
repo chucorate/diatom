@@ -41,9 +41,11 @@ class Diatom():
 
 
     def set_objective_functions(self, objective_reactions_dict: dict[str, float] | None = None) -> None:
+        model = self.model
+
         # use predefined objective functions
         if objective_reactions_dict is None or len(objective_reactions_dict) == 0:
-            linear_coeffs = linear_reaction_coefficients(self.model)
+            linear_coeffs = linear_reaction_coefficients(model)
             self.objectives = {reaction.id: coeff for reaction, coeff in linear_coeffs.items()} # should be single key,value dict, could hold more   
             return
         
@@ -51,7 +53,9 @@ class Diatom():
         for reaction_id, coeff in objective_reactions_dict.items():
             self.objectives[reaction_id] = coeff
 
-        self.model.objective = self.objectives    
+        model.objective = {model.reactions.get_by_id(r): coeff for r, coeff in self.objectives.items()}  
+
+        print(model.objective) 
 
     
     def modify_bounds(self, bounds_dict: dict[str, tuple[Numerical, Numerical]]) -> None:
