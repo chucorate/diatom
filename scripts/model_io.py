@@ -64,36 +64,41 @@ class ModelIO():
         x_str = self._format_coord(grid_point[0])
         y_str = self._format_coord(grid_point[1])
         return f"x_{x_str}_y_{y_str}.pkl"
+    
 
-
-    def get_directory(self, grid_point: np.ndarray, analysis: Literal["feasibility", "qual_fva"]) -> Path:
+    def get_directory(self, subdirectory: str) -> Path:
         model_name = self.model_name
         
         Lx, Ly = self.grid_dimensions
         reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
         grid_dim = f"Lx_{Lx:.4f}_Ly_{Ly:.4f}_{reaction1}_{reaction2}"
 
-        filename = f"{analysis}_{self.coordinates_to_filename(grid_point)}"
-
-        directory = Path(SAVE_POINTS_DIR) / model_name / grid_dim / analysis
+        directory = Path(SAVE_POINTS_DIR) / model_name / grid_dim / subdirectory
         directory.mkdir(parents=True, exist_ok=True) 
 
         if self.directory is None:
             self.directory = Path(SAVE_POINTS_DIR) / model_name / grid_dim 
 
+        return directory
+
+
+    def get_point_directory(self, grid_point: np.ndarray, subdirectory: Literal["feasibility", "qual_fva"]) -> Path:
+        directory = self.get_directory(subdirectory)
+        filename = f"{subdirectory}_{self.coordinates_to_filename(grid_point)}"
+
         return directory / filename
     
 
-    def is_saved(self, grid_point: np.ndarray, analysis: Literal["feasibility", "qual_fva"]) -> bool:
-        return self.get_directory(grid_point, analysis).exists()
+    def is_point_saved(self, grid_point: np.ndarray, subdirectory: Literal["feasibility", "qual_fva"]) -> bool:
+        return self.get_point_directory(grid_point, subdirectory).exists()
     
 
     def load_point(self, grid_point: np.ndarray, analysis: Literal["feasibility", "qual_fva"]) -> bool | tuple | None:
-        if not self.is_saved(grid_point, analysis):
+        if not self.is_point_saved(grid_point, analysis):
             #print(f"directory doesn't exists")
             return None 
         
-        path = self.get_directory(grid_point, analysis)
+        path = self.get_point_directory(grid_point, analysis)
 
         with open(path, 'rb') as f:
             loaded_data = pickle.load(f)
@@ -109,7 +114,7 @@ class ModelIO():
         }
         
         # making the directory to store the point
-        path = self.get_directory(grid_point, "feasibility")
+        path = self.get_point_directory(grid_point, "feasibility")
         
         with open(path, "wb") as f:
             pickle.dump(point_dict, f)
@@ -122,7 +127,7 @@ class ModelIO():
         }
         
         # making the directory to store the point
-        path = self.get_directory(grid_point, "qual_fva")
+        path = self.get_point_directory(grid_point, "qual_fva")
         
         with open(path, "wb") as f:
             pickle.dump(point_dict, f)
@@ -134,3 +139,36 @@ class ModelIO():
 
         path = self.directory / "qual_fva" / "qual_vector.json"
         self.modelclass.analyze.qual_vector_df.to_json(path, orient="records", indent=2)
+
+
+    def get_clusters_directory(self) -> Path:
+        reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
+        filename = f"{reaction1}_{reaction2}_clusters_Delta{self.modelclass.grid.delta}.pkl"
+
+        directory = self.get_directory("clustering")
+
+        return directory / filename
+
+
+    def are_clusters_saved(self):
+        return self.get_clusters_directory().exists()
+    
+
+    def load_clusters(self) -> tuple | None:
+        if not self.are_clusters_saved():
+            return None 
+        
+        path = self.get_clusters_directory()
+
+        with open(path, 'rb') as f:
+            clusters_tuple = pickle.load(f)
+            return clusters_tuple
+
+    
+    def save_clusters(self, n_clusters: int, clusters: np.ndarray) -> None:
+        clusters_tuple = (n_clusters, clusters)
+        
+        # making the directory to store clusters
+        path = self.get_clusters_directory()
+        with open(path, "wb") as f:
+            pickle.dump(clusters_tuple, f)

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Any
 
 import numpy as np
 import pandas as pd
@@ -6,6 +6,8 @@ import pandas as pd
 from scipy.spatial import distance
 from scipy.cluster.hierarchy import fcluster
 from scipy.cluster import hierarchy
+
+from diatom.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST
 
 if TYPE_CHECKING:
     from ecosystem.base import BaseEcosystem
@@ -68,6 +70,12 @@ class ModelClustering():
         Uses pairwise Jaccard distances between grid points and stores the resulting
         cluster labels and number of clusters as attributes.
         """
+
+        loaded_clusters = self.modelclass.io.load_clusters()
+        if isinstance(loaded_clusters, tuple):
+            self.grid_n_clusters, self.grid_clusters = loaded_clusters
+            return 
+
         if self.qual_vector_df is None:
             print("No qualitative FVA values stored. Run qual_fva analysis first!")
             return
@@ -82,10 +90,9 @@ class ModelClustering():
 
         print("Clustering grid points ...") 
         self.grid_n_clusters, self.grid_clusters = self._map_clusters(method, qualitative_vector, **kwargs)
+        
 
-
-    @staticmethod
-    def _map_clusters(method: str, qualitative_vector: np.ndarray, **kwargs) -> tuple[int, np.ndarray]:
+    def _map_clusters(self, method: str, qualitative_vector: np.ndarray, **kwargs) -> tuple[int, np.ndarray]:
         """Compute pairwise Jaccard distances and apply a clustering method.
 
         Returns the number of clusters and a vector of cluster labels.
@@ -99,6 +106,7 @@ class ModelClustering():
         else:
             raise ValueError(f"Unknown method: {method}")
         
+        self.modelclass.io.save_clusters(n_clusters, clusters)
         print(f"Done! n_clusters: {n_clusters}")    
         
         return n_clusters, clusters
@@ -183,34 +191,67 @@ class ModelClustering():
         return comparative_df
     
 
-    def get_cluster_metrics(self, reaction_id: str) -> pd.DataFrame:
+    def get_cluster_global_metrics(self) -> pd.DataFrame:
         grid_clusters = self.grid_clusters
-        n_clusters = self.grid_n_clusters
         assert grid_clusters is not None
 
         fva_reactions = self.modelclass.analyze.fva_reactions
-        reaction_index = fva_reactions.index(reaction_id)
-        print(reaction_index)
-
         fva_results = self.modelclass.analyze.fva_results
-        reaction_fva_results = (fva_results[:, reaction_index, :])
-        #print(reaction_fva_results.shape, "\n", reaction_fva_results)
 
-        metric_names = [metric.__name__ for metric in METRIC_LIST]
+        metric_names = [metric.__name__ for metric in GLOBAL_METRIC_LIST]
 
-        columns: dict[str, list[float]] = {}
-        for cluster_index in range(1, n_clusters+1):
-            filtered_results = reaction_fva_results[grid_clusters == cluster_index]
-            metric_results = [metric(filtered_results) for metric in METRIC_LIST]
-            columns[f"c{cluster_index}"] = metric_results
+        rows: list[dict[str, Any]] = []
+        for cluster_index in range(1, self.grid_n_clusters+1):
+            metric_results = [metric(fva_reactions, fva_results, grid_clusters, cluster_index) for metric in GLOBAL_METRIC_LIST]
 
-        df = pd.DataFrame(columns, metric_names)
+            for metric_name, metric_value in zip(metric_names, metric_results):
+                rows.append({
+                    "cluster": cluster_index,
+                    "metric": metric_name,
+                    "value": metric_value
+                })
+
+        df = pd.DataFrame(rows)
 
         rxn1, rxn2 = self.modelclass.analyze.analyzed_reactions
-        df.to_csv(f"clusters/metrics/{reaction_id}_metrics_{rxn1}_{rxn2}_clusters.csv", index=True, encoding='utf-8')
+        df.to_csv(f"clusters/metrics/global_metrics_{rxn1}_{rxn2}_clusters.csv", index=False, encoding='utf-8')
 
         return df
     
+
+    def get_cluster_metrics_per_reaction(self, reaction_list: list[str]) -> pd.DataFrame:
+        grid_clusters = self.grid_clusters
+        assert grid_clusters is not None
+
+        fva_reactions = self.modelclass.analyze.fva_reactions
+        fva_results = self.modelclass.analyze.fva_results
+
+        metric_names = [metric.__name__ for metric in REACTION_METRIC_LIST]
+
+        rows: list[dict[str, Any]] = []
+        for reaction_id in reaction_list:
+            reaction_index = fva_reactions.index(reaction_id)
+            reaction_fva_results = (fva_results[:, reaction_index, :])
+
+            for cluster_index in range(1, self.grid_n_clusters+1):
+                filtered_results = reaction_fva_results[grid_clusters == cluster_index]
+                metric_results = [metric(filtered_results) for metric in REACTION_METRIC_LIST]
+
+                for metric_name, metric_value in zip(metric_names, metric_results):
+                    rows.append({
+                        "reaction_id": reaction_id,
+                        "cluster": cluster_index,
+                        "metric": metric_name,
+                        "value": metric_value
+                    })
+
+        df = pd.DataFrame(rows)
+
+        rxn1, rxn2 = self.modelclass.analyze.analyzed_reactions
+        df.to_csv(f"clusters/metrics/all_metrics_{rxn1}_{rxn2}_clusters.csv", index=False, encoding='utf-8')
+
+        return df
+
 
 # ======================================================= CLUSTER FUNCTIONS =======================================================
 
@@ -224,76 +265,3 @@ def get_hierarchical_clusters(dvector: np.ndarray, k: int = 20, lmethod: str = '
 
     return k, clusters # clusters are indexed from 1
 
-
-# metrics
-
-def minimum(x: np.ndarray) -> float:
-    return float(min(x[:, 0]))
-
-
-def maximum(x: np.ndarray) -> float:
-    return float(max(x[:, 1]))
-
-
-def mean_range(x: np.ndarray) -> float:
-    return float(np.mean(x[:, 1] - x[:, 0]))
-
-
-def mean_midpoint(x: np.ndarray) -> float:
-    mid = 0.5 * (x[:, 0] + x[:, 1])
-    return float(np.mean(mid))
-
-
-def mean_relative_range(x: np.ndarray, eps: float = 1e-9) -> float:
-    r = x[:, 1] - x[:, 0]
-    cap = np.maximum(np.abs(x[:, 0]), np.abs(x[:, 1]))
-    return float(np.mean(r / (cap + eps)))
-
-
-def median_range(x: np.ndarray) -> float:
-    return float(np.median(x[:, 1] - x[:, 0]))
-
-
-def median_midpoint(x: np.ndarray) -> float:
-    mid = 0.5 * (x[:, 0] + x[:, 1])
-    return float(np.median(mid))
-
-
-def box_range(x: np.ndarray) -> float:
-    r = x[:, 1] - x[:, 0]
-    return float(np.percentile(r, 75) - np.percentile(r, 25))
-
-
-def frac_variable(x: np.ndarray, delta: float = 1e-9) -> float:
-    r = x[:, 1] - x[:, 0]
-    return float(np.mean(r > delta))
-
-
-def frac_zero_fixed(x: np.ndarray, delta: float = 1e-9) -> float:
-    return float(np.mean((np.abs(x[:, 0]) <= delta) & (np.abs(x[:, 1]) <= delta)))
-
-
-def frac_bidirectional(x: np.ndarray, delta: float = 1e-9) -> float:
-    return float(np.mean((x[:, 0] < -delta) & (x[:, 1] > delta)))
-
-
-def mean_abs_flux(x: np.ndarray) -> float:
-
-    cap = np.maximum(np.abs(x[:, 0]), np.abs(x[:, 1]))
-    return float(np.mean(cap))
-
-
-METRIC_LIST: list[Callable] = [
-    minimum,
-    maximum,
-    mean_range,
-    mean_midpoint,
-    mean_relative_range,
-    median_range,
-    median_midpoint,
-    box_range,
-    frac_variable,
-    frac_zero_fixed,
-    frac_bidirectional,
-    mean_abs_flux,
-]

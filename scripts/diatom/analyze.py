@@ -265,6 +265,7 @@ class DiatomAnalyze():
 
     # ================================================== QUANTITATIVE GRID ANALYSIS ==================================================
 
+
     PointList = list[float | int] | list[int] | list[float]
     def quan_FCA(self, grid_x: PointList, grid_y: PointList, reaction_ids: tuple[str, str]) -> None:
         """Performs quantitative Flux Coupling Analysis on two reactions (rxns_analysis) on points of a sub-grid defined by points grid_x, grid_y.
