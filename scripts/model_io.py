@@ -1,12 +1,12 @@
-from typing import TYPE_CHECKING, cast, Literal
+from typing import TYPE_CHECKING, Literal
 import pickle
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 
 from cobra import Model
 import cobra.io
-import numpy as np
-
 
 if TYPE_CHECKING:
     from ecosystem.base import BaseEcosystem
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 
 MODEL_DIR = "models"
+
 SAVE_POINTS_DIR = "models/points"
 
 
@@ -54,37 +55,67 @@ class ModelIO():
         return self.modelclass.grid.points_per_axis
     
 
+    @property
+    def results_directory(self) -> Path:
+        reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
+        assert not (reaction1 == "" or reaction2 == "")
+
+        path = Path("result_files")
+        return path / self.model_name / f"{reaction1}_{reaction2}"
+    
+
+    @property
+    def analysis_directory(self) -> Path:
+        path = self.results_directory / "analysis"
+        return path
+    
+
+    @property
+    def dataframe_directory(self) -> Path:
+        path = self.results_directory / "dataframes"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    
+    
+    @property
+    def plots_directory(self) -> Path:
+        path = self.results_directory / "plots"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+
+    # =================================================== ANALYSIS DIRECTORY ===================================================
+
+    
     @staticmethod
     def _format_coord(x: float) -> str:
         # Convierte el float a string válido para nombre de archivo, con precisión fija
         return f"{round(x, 6):.6f}".replace('.', 'p').replace('-', 'm')
     
 
-    def coordinates_to_filename(self, grid_point: np.ndarray) -> str:
+    def _coordinates_to_filename(self, grid_point: np.ndarray) -> str:
         x_str = self._format_coord(grid_point[0])
         y_str = self._format_coord(grid_point[1])
         return f"x_{x_str}_y_{y_str}.pkl"
     
 
-    def get_directory(self, subdirectory: str) -> Path:
-        model_name = self.model_name
-        
+    def get_directory(self, subdirectory: Literal["feasibility", "qual_fva", "clustering"]) -> Path:
         Lx, Ly = self.grid_dimensions
-        reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
-        grid_dim = f"Lx_{Lx:.4f}_Ly_{Ly:.4f}_{reaction1}_{reaction2}"
+        grid_dim = f"Lx_{Lx:.4f}_Ly_{Ly:.4f}"
 
-        directory = Path(SAVE_POINTS_DIR) / model_name / grid_dim / subdirectory
-        directory.mkdir(parents=True, exist_ok=True) 
-
+        directory = self.analysis_directory / grid_dim / subdirectory
+        
         if self.directory is None:
-            self.directory = Path(SAVE_POINTS_DIR) / model_name / grid_dim 
+            self.directory = self.analysis_directory / grid_dim 
+
+        directory.mkdir(parents=True, exist_ok=True) 
 
         return directory
 
 
     def get_point_directory(self, grid_point: np.ndarray, subdirectory: Literal["feasibility", "qual_fva"]) -> Path:
         directory = self.get_directory(subdirectory)
-        filename = f"{subdirectory}_{self.coordinates_to_filename(grid_point)}"
+        filename = f"{subdirectory}_{self._coordinates_to_filename(grid_point)}"
 
         return directory / filename
     
@@ -133,17 +164,11 @@ class ModelIO():
             pickle.dump(point_dict, f)
 
 
-    def save_qual_df(self) -> None:
-        if self.directory is None:
-            raise Exception()
-
-        path = self.directory / "qual_fva" / "qual_vector.json"
-        self.modelclass.analyze.qual_vector_df.to_json(path, orient="records", indent=2)
-
-
     def get_clusters_directory(self) -> Path:
         reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
-        filename = f"{reaction1}_{reaction2}_clusters_Delta{self.modelclass.grid.delta}.pkl"
+        delta = self.modelclass.grid.delta
+        n_clusters = self.modelclass.clustering.initial_n_clusters
+        filename = f"{reaction1}_{reaction2}_clusters_Delta{delta}_NC{n_clusters}.pkl"
 
         directory = self.get_directory("clustering")
 
@@ -172,3 +197,37 @@ class ModelIO():
         path = self.get_clusters_directory()
         with open(path, "wb") as f:
             pickle.dump(clusters_tuple, f)
+
+
+    # =================================================== DATAFRAME DIRECTORY ===================================================
+
+
+    def save_cluster_df(
+            self, 
+            df: pd.DataFrame, 
+            type: Literal["Qualitative_profiles", "Metrics_per_reaction", "Global_metrics"], 
+            index: bool = False,
+            reaction_len: int = -1,
+            metric_list: list[str] | None = None,
+        ) -> None: 
+        delta = self.modelclass.grid.delta
+        file = f"{type}_NR{reaction_len}_Delta{delta}"
+        if metric_list is not None:
+            file += f"_M{len(metric_list)}"
+
+        path = self.dataframe_directory / f"{file}.csv"
+        if path.exists():
+            print(f"Skipping existing file: {path.name}")
+            return
+        
+        df.to_csv(path, index=index, encoding='utf-8')
+
+
+    # =================================================== PLOT DIRECTORY ===================================================
+
+
+    def save_plot_path(self) -> Path:
+        reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
+        delta = self.modelclass.grid.delta
+        n_clusters = self.modelclass.clustering.grid_n_clusters
+        return self.plots_directory / f"{reaction1}_{reaction2}_NC{n_clusters}_Delta{delta}.png"

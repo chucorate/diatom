@@ -62,7 +62,12 @@ class DiatomPlot():
         ax.grid(True)
 
         plt.tight_layout()
-        plt.savefig(f"plots/{reaction1}_{reaction2}_NC{self.diatom.clustering.grid_n_clusters}_Delta{self.diatom.grid.delta}.png")
+        #ax.set_aspect("auto")
+        #ax.set_xlim(points[:, 0].min(), points[:, 0].max())
+        #ax.set_ylim(points[:, 1].min(), points[:, 1].max())
+        #fig.subplots_adjust(right=0.88)
+
+        plt.savefig(self.diatom.io.save_plot_path())
         plt.show()
 
 
