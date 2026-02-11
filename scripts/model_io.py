@@ -56,12 +56,16 @@ class ModelIO():
     
 
     @property
-    def results_directory(self) -> Path:
+    def analyzed_tuple_string(self) -> str:
         reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
         assert not (reaction1 == "" or reaction2 == "")
+        return f"{reaction1}_{reaction2}"
 
+
+    @property
+    def results_directory(self) -> Path:
         path = Path("result_files")
-        return path / self.model_name / f"{reaction1}_{reaction2}"
+        return path / self.model_name / self.analyzed_tuple_string
     
 
     @property
@@ -209,6 +213,7 @@ class ModelIO():
             index: bool = False,
             reaction_len: int = -1,
             metric_list: list[str] | None = None,
+            overwrite: bool = False,
         ) -> None: 
         delta = self.modelclass.grid.delta
         file = f"{type}_NR{reaction_len}_Delta{delta}"
@@ -216,18 +221,30 @@ class ModelIO():
             file += f"_M{len(metric_list)}"
 
         path = self.dataframe_directory / f"{file}.csv"
-        if path.exists():
+        if path.exists() and not overwrite:
             print(f"Skipping existing file: {path.name}")
             return
         
         df.to_csv(path, index=index, encoding='utf-8')
 
+    import xlsxwriter
+    def merge_to_excel(self, df_dict: dict[str, pd.DataFrame]) -> None:
+        path = Path("result_files") / "DM" / "supplementary" / f"{self.analyzed_tuple_string}.xlsx"
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
+            for df_name, df in df_dict.items():
+                df.to_excel(writer, sheet_name=df_name, index=False)
+
 
     # =================================================== PLOT DIRECTORY ===================================================
 
 
-    def save_plot_path(self) -> Path:
+    def save_plot_path(self) -> Path | None:
         reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
         delta = self.modelclass.grid.delta
         n_clusters = self.modelclass.clustering.grid_n_clusters
-        return self.plots_directory / f"{reaction1}_{reaction2}_NC{n_clusters}_Delta{delta}.png"
+        path = self.plots_directory / f"{reaction1}_{reaction2}_NC{n_clusters}_Delta{delta}.png"
+        if path.exists():
+            return 
+        return path

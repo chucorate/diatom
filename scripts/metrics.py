@@ -1,6 +1,11 @@
 from typing import Callable
 
 import numpy as np
+import pandas as pd
+
+import prince
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import mutual_info_score
 
 DELTA = 1e-6
 EPS = 1e-9
@@ -139,46 +144,65 @@ def _ratio_metric(
         cluster_index: int, 
         reaction_tuple: tuple[str, str], 
         num_func: Callable[[Floating, Floating], Floating] | None = None, 
-    ) -> float:
+    ) -> tuple[float, float]:
     rxn1_id, rxn2_id = reaction_tuple
 
     rxn1 = _midpoint(_filtered_minmax(fva_reactions, fva_results, grid_clusters, cluster_index, rxn1_id))
     rxn2 = _midpoint(_filtered_minmax(fva_reactions, fva_results, grid_clusters, cluster_index, rxn2_id))
 
-    m1 = float(np.median(rxn1))
-    m2 = float(np.median(rxn2))
+    m1 = float(np.median(np.abs(rxn1)))
+    m2 = float(np.median(np.abs(rxn2)))
 
     num = num_func(m1, m2) if num_func is not None else m1
 
-    ratio = _safe_div(num, m1+m2)
-    return float(ratio)
+    simple_ratio = _safe_div(num, m2)
+    ratio = _safe_div(num, m1 + m2)
+    return float(ratio), float(simple_ratio)
 
 
-def s_rubisco_midpoint_median(
+def s_rubisco(
         fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
     ) -> float:
-    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("RUBISC_h", "RUBISO_h"))
+    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("RUBISC_h", "RUBISO_h"))[0]
 
 
-def photons_per_rubisc_midpoint_median(
-        fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
-    ) -> float:
-    num_func = lambda x,y: np.abs(x)
-    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("EX_photon_e", "RUBISC_h"), num_func=num_func)
-
-
-def no3_per_rubisc_midpoint_median(
+def photons_per_rubisc_difference_ratio(
         fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
     ) -> float:
     num_func = lambda x,y: x - y
-    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("EX_no3_e", "RUBISC_h"), num_func=num_func)
+    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("EX_photon_e", "RUBISC_h"), num_func=num_func)[0]
 
 
-def co2_per_rubisc_midpoint_median(
+def photons_per_rubisc_simple_ratio(
+        fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
+    ) -> float:
+    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("EX_photon_e", "RUBISC_h"))[1]
+
+
+def no3_per_rubisc_difference_ratio(
         fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
     ) -> float:
     num_func = lambda x,y: x - y
-    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("EX_co2_e", "RUBISC_h"), num_func=num_func)
+    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("EX_no3_e", "RUBISC_h"), num_func=num_func)[0]
+
+
+def no3_per_rubisc_simple_ratio(
+        fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
+    ) -> float:
+    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("EX_no3_e", "RUBISC_h"))[1]
+
+
+def co2_per_rubisc_difference_ratio(
+        fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
+    ) -> float:
+    num_func = lambda x,y: x - y
+    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("EX_co2_e", "RUBISC_h"), num_func=num_func)[0]
+
+
+def co2_per_rubisc_simple_ratio(
+        fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
+    ) -> float:
+    return _ratio_metric(fva_reactions, fva_results, grid_clusters, cluster_index, ("EX_co2_e", "RUBISC_h"))[1]
 
 
 def _all_reaction_ranges(fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int) -> np.ndarray:
@@ -244,7 +268,7 @@ def _no3_per_N_biomass(
 
     N_biomass = float(np.sum(mids))
 
-    return float(_safe_div(no3 - N_biomass, no3 + N_biomass)), float(no3 + N_biomass)
+    return float(_safe_div(no3, no3 + N_biomass)), float(no3 + N_biomass)
 
 
 def no3_per_N_biomass_ratio(
@@ -276,7 +300,7 @@ def _co2_per_C_biomass(
 
     C_biomass = float(np.sum(mids))
 
-    return float(_safe_div(co2 - C_biomass, co2 + C_biomass)), float(co2 + C_biomass)
+    return float(_safe_div(co2, co2 + C_biomass)), float(co2 + C_biomass)
 
 
 def co2_per_C_biomass_ratio(
@@ -297,11 +321,207 @@ GLOBAL_METRIC_LIST = [
     no3_per_N_biomass_sum,
     co2_per_C_biomass_ratio,
     co2_per_C_biomass_sum,
-    s_rubisco_midpoint_median,
-    photons_per_rubisc_midpoint_median,
-    no3_per_rubisc_midpoint_median,
-    co2_per_rubisc_midpoint_median,
+    s_rubisco,
+    photons_per_rubisc_simple_ratio,
+    no3_per_rubisc_simple_ratio,
+    co2_per_rubisc_simple_ratio,
+    photons_per_rubisc_difference_ratio,
+    no3_per_rubisc_difference_ratio,
+    co2_per_rubisc_difference_ratio,
     mean_range_all_reactions,
     std_range_all_reactions,
     blocked_fraction_all_reactions,
 ]
+
+
+# ================================================== FEATURE SELECTION SCORE METRICS ==================================================
+
+
+def first_mixed_merge_height(reaction_states: np.ndarray, linkage_matrix: np.ndarray, **kwargs) -> float:
+    """Returns the dendrogram height at which points with different qualitative states for a given reaction are first merged.
+
+    Parameters
+    ----------
+    linkage_matrix
+        Output of scipy.cluster.hierarchy.linkage, shape (n-1, 4)
+    reaction_states
+        Qualitative states of a single reaction across grid points,
+        shape (n_points,)
+
+    Returns
+    -------
+    float
+        Merge height. Larger means earlier (more explanatory).
+    """
+    n_points = reaction_states.shape[0]
+    reaction_states = np.round(reaction_states, 2)
+    
+    # cluster_id -> set of point indices
+    active_clusters: dict[int, list[int]] = {i: [i] for i in range(n_points)}
+
+    for merge_index, (left, right, height, _) in enumerate(linkage_matrix):
+        left_id = int(left)
+        right_id = int(right)
+        new_cluster_id = n_points + merge_index
+
+        merged_points = active_clusters[left_id] + active_clusters[right_id]
+        active_clusters[new_cluster_id] = merged_points
+
+        del active_clusters[left_id], active_clusters[right_id]
+
+        merged_states = np.unique(reaction_states[merged_points])
+
+        if len(merged_states) > 1:
+            return float(height)
+
+    return -1.0 # reaction never separates clusters
+
+
+def intra_inter(reaction_states: np.ndarray, clusters: np.ndarray, **kwargs) -> float:
+    cluster_ids = np.unique(clusters)
+
+    # ---------- intra ----------
+    intra_values: list[float] = []
+    for c in cluster_ids:
+        cluster_states = reaction_states[clusters == c]
+        purity = _cluster_purity(cluster_states)
+        intra_values.append(1.0 - purity)
+
+    D_intra = float(np.mean(intra_values))
+
+    # ---------- inter ----------
+    inter_values: list[float] = []
+    for i, c1 in enumerate(cluster_ids):
+        states_1 = reaction_states[clusters == c1]
+        for c2 in cluster_ids[i + 1:]:
+            states_2 = reaction_states[clusters == c2]
+            inter_values.append(
+                _inter_cluster_disagreement(states_1, states_2)
+            )
+
+    D_inter = float(np.mean(inter_values)) if inter_values else 0.0
+
+    return D_inter - D_intra
+
+
+def _cluster_purity(states: np.ndarray) -> float:
+    """Computes purity of a categorical vector."""
+    values, counts = np.unique(states, return_counts=True)
+    return counts.max() / counts.sum()
+
+
+def _inter_cluster_disagreement(states_a: np.ndarray, states_b: np.ndarray) -> float:
+    """Computes categorical disagreement rate between two clusters.
+
+    Parameters
+    ----------
+    states_a, states_b
+        Qualitative states of a reaction in two different clusters.
+
+    Returns
+    -------
+    float
+        Disagreement rate in [0, 1].
+    """
+    values_a, counts_a = np.unique(states_a, return_counts=True)
+    values_b, counts_b = np.unique(states_b, return_counts=True)
+
+    total_pairs = counts_a.sum() * counts_b.sum()
+    same_pairs = 0
+
+    freq_a = dict(zip(values_a, counts_a))
+    freq_b = dict(zip(values_b, counts_b))
+
+    for v in freq_a.keys() & freq_b.keys():
+        same_pairs += freq_a[v] * freq_b[v]
+
+    return 1.0 - same_pairs / total_pairs
+
+
+def mutual_information(reaction_states: np.ndarray, clusters: np.ndarray, **kwargs) -> float:
+    return float(mutual_info_score(reaction_states, clusters))
+
+
+def entropy(reaction_states: np.ndarray, eps: float = 1e-12, **kwargs) -> float:
+    """Entropía categórica H(X)."""
+    values, counts = np.unique(reaction_states, return_counts=True)
+    p = counts / counts.sum()
+    return -np.sum(p * np.log(p + eps))
+
+
+def std_normalized(fva_result: np.ndarray, eps: float = 1e-12, **kwargs) -> float:
+    ranges = fva_result[:, 1] - fva_result[:, 0]  # rango por punto
+    return float(np.std(ranges) / (np.mean(ranges) + eps))
+
+
+PER_REACTION_SCORE_FUNCTIONS = [
+    #first_mixed_merge_height,
+    intra_inter,
+    mutual_information,
+    entropy,
+    std_normalized,
+    ]
+
+
+def rf_importance(qual_vector_df: pd.DataFrame, grid_clusters: np.ndarray, n_estimators: int = 100, **kwargs) -> pd.Series:
+    """Identifica qué reacciones son las más importantes para predecir la pertenencia a los clusters usando Random Forest."""
+    if qual_vector_df.empty or grid_clusters.size == 0:
+        raise RuntimeError("Datos insuficientes (DF vacío o clusters no calculados).")
+
+    X = qual_vector_df.values
+    y = grid_clusters
+
+    rf = RandomForestClassifier(n_estimators=n_estimators, random_state=42, class_weight='balanced')
+    rf.fit(X, y)
+
+    importances = rf.feature_importances_
+    feature_importance_series = pd.Series(importances, index=qual_vector_df.columns).sort_values(ascending=False)
+
+    return feature_importance_series
+
+
+def mca_score(qual_vector_df: pd.DataFrame, n_components: int = 5, state_prefix: str = "s", min_nunique: int = 2, random_state: int = 42, **kwargs) -> pd.Series:
+    """MCA no supervisado para selección de reacciones a partir de qual_vector_df.
+
+    Parameters
+    ----------
+    qual_vector_df : pd.DataFrame
+        Filas = observaciones, columnas = reacciones,
+        valores = estados cualitativos (numéricos pero categóricos).
+    n_components : int
+        Número de ejes MCA.
+    state_prefix : str
+        Prefijo para codificar estados (evita ambigüedad numérica).
+    min_nunique : int
+        Número mínimo de estados distintos para conservar una reacción.
+    random_state : int
+
+    Returns
+    -------
+    pd.Series
+        Índice = reacción, valor = score MCA (mayor = más explicativa).
+    """
+    # filter non informative columns
+    informative_cols = qual_vector_df.columns[qual_vector_df.nunique(dropna=True) >= min_nunique]
+    if len(informative_cols) == 0:
+        raise ValueError("No hay reacciones con variabilidad suficiente para MCA.")
+    Q = qual_vector_df[informative_cols].copy()
+
+    # force categorical data type
+    X_cat = Q.fillna("NaN").astype(int, errors="ignore").astype(str)
+    X_cat = X_cat.apply(lambda col: state_prefix + col)
+
+    mca = prince.MCA(n_components=n_components, n_iter=10, random_state=random_state, ).fit(X_cat)
+
+    # index format: "REACTION__sSTATE"
+    cat_contrib = (mca.column_contributions_.iloc[:, :n_components].fillna(0.0))
+
+    reaction_scores = (cat_contrib.groupby(lambda s: s.split("__")[0]).sum().sum(axis=1).sort_values(ascending=False))
+    return reaction_scores
+
+
+GLOBAL_SCORE_FUNCTIONS = [
+    rf_importance,
+    mca_score,
+]
+

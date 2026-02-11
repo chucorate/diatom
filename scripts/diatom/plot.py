@@ -67,7 +67,10 @@ class DiatomPlot():
         #ax.set_ylim(points[:, 1].min(), points[:, 1].max())
         #fig.subplots_adjust(right=0.88)
 
-        plt.savefig(self.diatom.io.save_plot_path())
+        path = self.diatom.io.save_plot_path()
+        if path is not None:
+            plt.savefig(path)
+            
         plt.show()
 
 
@@ -130,3 +133,24 @@ class DiatomPlot():
             y2 = y2[rxns_analysis[1]].to_numpy()
 
             ax.fill_between(x, y1,y2, color='none',hatch='//', edgecolor="k", linewidth=0.001)
+
+
+
+    """if plot_top > 0:
+            self._plot_reaction_scores(df, col_to_sort, plot_top)
+            
+        return df"""
+    def reaction_scores(self, df, column, top_n):
+        """Método auxiliar para no ensuciar la función principal"""
+        plt.figure(figsize=(10, 6))
+        # Tomamos el top N
+        data_to_plot = df[column].head(top_n)
+        
+        sns.barplot(x=data_to_plot.values, y=data_to_plot.index, palette="viridis")
+        
+        plt.title(f"Top {top_n} Reacciones según {column}")
+        plt.xlabel(f"Score ({column})")
+        plt.ylabel("Reaction ID")
+        plt.grid(axis='x', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        plt.show()

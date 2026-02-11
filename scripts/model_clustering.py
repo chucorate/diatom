@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Callable, Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -7,7 +7,7 @@ from scipy.spatial import distance
 from scipy.cluster.hierarchy import fcluster
 from scipy.cluster import hierarchy
 
-from scripts.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST
+from scripts.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST, PER_REACTION_SCORE_FUNCTIONS, GLOBAL_SCORE_FUNCTIONS
 
 if TYPE_CHECKING:
     from ecosystem.base import BaseEcosystem
@@ -20,7 +20,9 @@ class ModelClustering():
         self.initial_n_clusters: int = 0
         self.grid_n_clusters: int = 0
         self.reaction_n_clusters: int = 0
-        self.grid_clusters, self.reaction_clusters = None, None
+        self.grid_clusters: np.ndarray = np.array([])
+        self.reaction_clusters: np.ndarray = np.array([])
+        self.linkage_matrix: np.ndarray = np.array([])
         self.bin_vector_df = None
 
 
@@ -62,7 +64,7 @@ class ModelClustering():
         z = z.T
 
         print(f"Clustering {z.shape[0]} reactions ...") 
-        self.reaction_n_clusters, self.reaction_clusters = self._map_clusters(method, z, **kwargs)
+        self.reaction_n_clusters, self.reaction_clusters, self.linkage_matrix = self._map_clusters(method, z, **kwargs)
 
  
     def set_grid_clusters(
@@ -80,10 +82,12 @@ class ModelClustering():
         """
         self.initial_n_clusters = initial_n_clusters
         
+        """
         loaded_clusters = self.modelclass.io.load_clusters()
         if isinstance(loaded_clusters, tuple):
             self.grid_n_clusters, self.grid_clusters = loaded_clusters
             return 
+        """
 
         if self.qual_vector_df is None:
             print("No qualitative FVA values stored. Run qual_fva analysis first!")
@@ -98,11 +102,11 @@ class ModelClustering():
             raise ValueError(f"Unknown vector: {vector}")
 
         print("Clustering grid points ...") 
-        self.grid_n_clusters, self.grid_clusters = self._map_clusters(method, qualitative_vector, **kwargs)
+        self.grid_n_clusters, self.grid_clusters, self.linkage_matrix = self._map_clusters(method, qualitative_vector, **kwargs)
         self.modelclass.io.save_clusters(self.grid_n_clusters, self.grid_clusters)
 
 
-    def _map_clusters(self, method: str, qualitative_vector: np.ndarray, **kwargs) -> tuple[int, np.ndarray]:
+    def _map_clusters(self, method: str, qualitative_vector: np.ndarray, **kwargs) -> tuple[int, np.ndarray, np.ndarray]:
         """Compute pairwise Jaccard distances and apply a clustering method.
 
         Returns the number of clusters and a vector of cluster labels.
@@ -112,12 +116,12 @@ class ModelClustering():
         dmatrix = distance.squareform(dvector)     
 
         if method == 'hierarchical':
-            n_clusters, clusters = get_hierarchical_clusters(dvector,**kwargs)
+            n_clusters, clusters, linkage_matrix = get_hierarchical_clusters(dvector,**kwargs)
         else:
             raise ValueError(f"Unknown method: {method}")
         
         print(f"Done! n_clusters: {n_clusters}")    
-        return n_clusters, clusters
+        return n_clusters, clusters, linkage_matrix
 
 
     #function to get representative qualitative values of a reaction in a cluster
@@ -144,6 +148,7 @@ class ModelClustering():
             changing: bool = True, 
             convert: bool = True,
             selected_reactions: list[str] | None = None,
+            overwrite: bool = False,
         ) -> pd.DataFrame:
         """Compute representative qualitative reaction profiles for each grid cluster.
 
@@ -151,7 +156,7 @@ class ModelClustering():
         appears in at least a given fraction of grid points. Optionally filters
         reactions that change between clusters and converts qualitative codes.
         """
-        if self.grid_clusters is None:
+        if self.grid_clusters.size == 0:
             raise RuntimeError("Missing clustering/qualitative FVA results!")
         
         #NJT to use qual_vector as well as bin_vector if required
@@ -187,7 +192,7 @@ class ModelClustering():
         if selected_reactions is not None:
             representatives = representatives.loc[selected_reactions]
        
-        self.modelclass.io.save_cluster_df(representatives, "Qualitative_profiles", reaction_len=reaction_len, index=True)
+        self.modelclass.io.save_cluster_df(representatives, "Qualitative_profiles", reaction_len=reaction_len, index=True, overwrite=overwrite)
         return representatives
 
 
@@ -212,9 +217,9 @@ class ModelClustering():
         return comparative_df
     
 
-    def get_cluster_global_metrics(self, reaction_list: list[str]) -> pd.DataFrame:
+    def get_cluster_global_metrics(self, reaction_list: list[str], overwrite: bool = False) -> pd.DataFrame:
         grid_clusters = self.grid_clusters
-        assert grid_clusters is not None
+        assert grid_clusters.size > 0
 
         fva_reactions = self.modelclass.analyze.fva_reactions
         fva_results = self.modelclass.analyze.fva_results
@@ -233,11 +238,11 @@ class ModelClustering():
                 })
 
         df = pd.DataFrame(rows)
-        self.modelclass.io.save_cluster_df(df, "Global_metrics", reaction_len=len(reaction_list), metric_list=GLOBAL_METRIC_LIST)
+        self.modelclass.io.save_cluster_df(df, "Global_metrics", reaction_len=len(reaction_list), metric_list=GLOBAL_METRIC_LIST, overwrite=overwrite)
         return df
     
 
-    def get_cluster_metrics_per_reaction(self, reaction_list: list[str]) -> pd.DataFrame:
+    def get_cluster_metrics_per_reaction(self, reaction_list: list[str], overwrite: bool = False) -> pd.DataFrame:
         grid_clusters = self.grid_clusters
         assert grid_clusters is not None
 
@@ -264,19 +269,120 @@ class ModelClustering():
                     })
 
         df = pd.DataFrame(rows)
-        self.modelclass.io.save_cluster_df(df, "Metrics_per_reaction", reaction_len=len(reaction_list), metric_list=REACTION_METRIC_LIST)
+        self.modelclass.io.save_cluster_df(df, "Metrics_per_reaction", reaction_len=len(reaction_list), metric_list=REACTION_METRIC_LIST, overwrite=overwrite)
         return df
 
+    
+    def reaction_scores(self, sort_score: bool = True, sort_index: int = 0, **kwargs) -> tuple[pd.DataFrame, list[str]]:
+        if self.qual_vector_df is None or self.grid_clusters.size == 0:
+            raise RuntimeError("Missing qualitative values and/or cluster indexes.")
+
+        df = pd.DataFrame(index=self.qual_vector_df.columns)
+
+        for score_func in GLOBAL_SCORE_FUNCTIONS:
+            df[score_func.__name__] = score_func(qual_vector_df=self.qual_vector_df, grid_clusters=self.grid_clusters)
+
+        for score_func in PER_REACTION_SCORE_FUNCTIONS:
+            func_name = score_func.__name__
+            scores = []
+            for rid in self.qual_vector_df.columns:
+                fva_reactions = self.modelclass.analyze.fva_reactions
+                fva_results = self.modelclass.analyze.fva_results
+                reaction_index = fva_reactions.index(rid)
+                val = score_func(
+                    reaction_states=self.qual_vector_df[rid].values,
+                    clusters=self.grid_clusters,
+                    linkage_matrix=self.linkage_matrix,
+                    fva_result = (fva_results[:, reaction_index, :])
+                )
+                scores.append(val)
+            df[func_name] = scores
+
+        col_to_sort = df.columns[sort_index] if sort_index < len(df.columns) else df.columns[0]
+        if sort_score:
+            df = df.sort_values(by=col_to_sort, ascending=False)
+
+        metric_names = [f.__name__ for f in GLOBAL_SCORE_FUNCTIONS] + [f.__name__ for f in PER_REACTION_SCORE_FUNCTIONS]
+        feature_selection = consensus_feature_selection(df, metric_names, **kwargs)
+
+        return df, feature_selection
+    
 
 # ======================================================= CLUSTER FUNCTIONS =======================================================
 
 
-def get_hierarchical_clusters(dvector: np.ndarray, k: int = 20, lmethod: str = 'complete', 
-                            criterion: str= 'maxclust', **kwards) -> tuple[int, np.ndarray]:
-    row_linkage = hierarchy.linkage(dvector, method=lmethod)
-    clusters = fcluster(row_linkage, t=k, criterion=criterion)
+def get_hierarchical_clusters(
+        dvector: np.ndarray, 
+        k: int = 20, 
+        lmethod: str = 'complete', 
+        criterion: str= 'maxclust', 
+        **kwards
+    ) -> tuple[int, np.ndarray, np.ndarray]:
+    linkage_matrix = hierarchy.linkage(dvector, method=lmethod)
+    clusters = fcluster(linkage_matrix, t=k, criterion=criterion)
 
     k = len(np.unique(clusters))
+    return k, clusters, linkage_matrix # clusters are indexed from 1
 
-    return k, clusters # clusters are indexed from 1
 
+def consensus_feature_selection(
+        score_df: pd.DataFrame, 
+        score_cols: list[str], 
+        k: int = 30, 
+        min_votes: int | None = 2, 
+        normalize: bool = True, 
+        show: bool = True,
+        **kwargs,
+    ) -> list[str]:
+    """
+    Consensus feature selection via top-k voting across multiple scores.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Index = reaction_id, columns = scores
+    score_cols : list of str
+        Columns to use as scores
+    k : int
+        Top-k reactions per score
+    min_votes : int or None
+        Minimum number of appearances required. If None, uses majority rule.
+    normalize : bool
+        Rank-based normalization per score
+
+    Returns
+    -------
+    DataFrame sorted by votes and mean rank
+    """
+    ranks = {}
+
+    for col in score_cols:
+        s = score_df[col].copy()
+        r = s.rank(ascending=False, method="average") if normalize else s
+        ranks[col] = r
+
+    rank_df = pd.DataFrame(ranks)
+    mean_rank = rank_df.mean(axis=1)
+
+    # top-k mask per score
+    topk_mask = rank_df <= k
+    votes = topk_mask.sum(axis=1)
+
+    if min_votes is None:
+        min_votes = int(np.ceil(len(score_cols) / 2))
+
+    out = pd.DataFrame({"votes": votes, "mean_rank": mean_rank})
+    out = out[votes >= min_votes]
+    out = out.sort_values(["votes", "mean_rank"], ascending=[False, True])
+
+    if show:
+        print(out.to_string())
+
+    reaction_selection = list(out.index)
+    return reaction_selection
+
+"""
+score_cols = ["rf_importance", "intra_inter_scores", "mutual_information_score", "std_normalized", "mca_score"]
+selected = consensus_feature_selection(df=df, score_cols=score_cols, k=20, min_votes=2)
+selected.head(40)
+"""
