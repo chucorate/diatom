@@ -1,0 +1,22 @@
+{
+    "experiment_hash": "n_const=0_#cc1c992e8ad47e45",
+    "created_at": "2026-02-13T15:54:18.803257",
+    "model_file": "iLB1027_lipid.xml",
+    "model_hash": "155cc3eaf6eb7fe6105855961f4db75bfc66cf72e1b3ac04e205b9dda9121587",
+    "reaction_tuple": [
+        "EX_no3_e",
+        "DM_biomass_c"
+    ],
+    "constraints": {},
+    "n_constraints": 0,
+    "sampling_parameters": {
+        "n_sampling_angles": 600,
+        "grid_delta": 0.25,
+        "n_clusters": 12
+    },
+    "environment": {
+        "python_version": "3.10.19",
+        "cobra_version": "0.30.0",
+        "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39"
+    }
+}
