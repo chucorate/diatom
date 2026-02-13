@@ -1,22 +1,33 @@
 from typing import TYPE_CHECKING, Literal
-import pickle
 from pathlib import Path
+from datetime import datetime
+import pickle
+import hashlib
+import json
+import platform
 
 import numpy as np
 import pandas as pd
-from cobra import Model
+import cobra
 import cobra.io
+from cobra import Model
+import xlsxwriter
 
 if TYPE_CHECKING:
     from ecosystem.base import BaseEcosystem
     from diatom.diatom import Diatom
 
 
-MODEL_DIR = "models"
-SAVE_POINTS_DIR = "models/points"
+MODEL_DIRECTORY = Path("models")
+RESULTS_DIRECTORY = Path("result_files")
 
 
-def load_model(model_name: str, model_directory: str = MODEL_DIR, solver: str = 'gurobi', **kwargs) -> Model:
+def file_hash(path):
+    with open(MODEL_DIRECTORY / path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+    
+
+def load_model(model_name: str, solver: str = 'gurobi', **kwargs) -> Model:
     """Loads a COBRA model from an SBML file using the specified solver.
 
     Parameters
@@ -35,20 +46,16 @@ def load_model(model_name: str, model_directory: str = MODEL_DIR, solver: str = 
     cobra.Model
         Loaded COBRA model with configured solver.
     """
-    path = Path(model_directory) / model_name
+    path = MODEL_DIRECTORY / model_name
     model = cobra.io.read_sbml_model(path, solver=solver, **kwargs)
-    model.solver.configuration.threads = 0
 
-    return model 
+    return model
 
 
-def save_models(model_dict: dict[str, Model], model_directory: str = MODEL_DIR) -> None:
+def save_models(model_dict: dict[str, Model]) -> None:
     """Saves all COBRA models in `model_dict` to `model_directory`."""    
-    output_dir = Path(model_directory)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     for model_name, model in model_dict.items():
-        filename = output_dir / f"{model_name}.xml"
+        filename = MODEL_DIRECTORY / f"{model_name}.xml"
         cobra.io.write_sbml_model(model, filename)
         print(f'model {model_name} stored')
 
@@ -61,9 +68,39 @@ class ModelIO():
     - saving and loading per-grid-point results and clustering data.
     - exporting dataframes and plots.
     """
-    def __init__(self, modelclass: "BaseEcosystem | Diatom", model_name: str):
+    def __init__(self, modelclass: "Diatom", model_name: str):
         self.modelclass = modelclass
         self.model_name: str = model_name
+        self.save_files: bool = False
+        self.load_files: bool = False
+
+
+    @property
+    def sampling_hash(self) -> str:
+        """Hash used to uniquely identify a sampling instance by its specified parameters."""
+        canonical = json.dumps(
+            dict(sorted(self.modelclass.metadata.items())),
+            sort_keys=True
+        )
+        hash = hashlib.sha256(canonical.encode()).hexdigest()[:16]
+        initial_label = f"n_const={len(self.modelclass.constraints)}_#"
+        hash = initial_label + hash
+
+        return hash
+    
+
+    @property
+    def numeric_identifier(self) -> str:
+        """String used to specify numeric, non_biologic parameters for data identification.
+        
+        Assumes a sampling hash has already been set, and using it alongside the numeric identifier
+        files can be saved and loaded safely without overwriting previous results."""
+        n_sampling_angles = self.modelclass.analyze.n_sampling_angles
+        grid_delta = self.modelclass.grid.grid_delta
+        initial_n_clusters = self.modelclass.clustering.initial_n_clusters
+
+        identifier = f"SA{n_sampling_angles}_D{round(grid_delta, 6)}_NC{initial_n_clusters}"
+        return identifier
 
 
     @property
@@ -78,28 +115,106 @@ class ModelIO():
 
     @property
     def results_directory(self) -> Path:
-        path = Path("result_files")
-        return path / self.model_name / self.analyzed_tuple_string
+        """General results directory."""
+        path = RESULTS_DIRECTORY / self.model_name / self.analyzed_tuple_string / self.sampling_hash
+        return path 
     
 
     @property
-    def analysis_directory(self) -> Path:
+    def _analysis_directory(self) -> Path:
+        """"Directory that holds analysis data.
+        
+        Only gets created when called from a method that saves or loads data."""
         path = self.results_directory / "analysis"
+        path.mkdir(parents=True, exist_ok=True)
         return path
     
 
     @property
-    def dataframe_directory(self) -> Path:
+    def _dataframe_directory(self) -> Path:
+        """"Directory that holds clustering dataframe data.
+        
+        Only gets created when called from a method that saves or loads data."""
         path = self.results_directory / "dataframes"
         path.mkdir(parents=True, exist_ok=True)
         return path
     
     
     @property
-    def plots_directory(self) -> Path:
+    def _plots_directory(self) -> Path:
+        """"Directory that holds plots.
+        
+        Only gets created when called from a method that saves or loads data."""
         path = self.results_directory / "plots"
         path.mkdir(parents=True, exist_ok=True)
         return path
+    
+
+    def write_metadata(self) -> None:
+        """Create or validate the metadata.json file for the current experiment.
+
+        If the file does not exist, it is created.
+        If it exists, its biological identity is validated against the
+        current experiment configuration. A mismatch raises an error.
+        """
+        if not self.save_files:
+            return
+
+        path = self.results_directory
+        path.mkdir(parents=True, exist_ok=True)
+
+        metadata_path = path / "metadata.json"
+        metadata = {
+            "experiment_hash": self.sampling_hash,
+            "created_at": datetime.now().isoformat(),
+            # biological identity
+            "model_file": self.modelclass.model_id,
+            "model_hash": self.modelclass.metadata["model_hash"],
+            "reaction_tuple": self.modelclass.metadata["reaction_tuple"],
+            "constraints": self.modelclass.metadata["constraints"],
+            "n_constraints": self.modelclass.metadata["n_constraints"],
+            # numerical config
+            "sampling_parameters": {
+                "n_sampling_angles": self.modelclass.analyze.n_sampling_angles,
+                "grid_delta": self.modelclass.grid.grid_delta,
+                "n_clusters": self.modelclass.clustering.initial_n_clusters,
+            },
+            # environment info
+            "environment": {
+                "python_version": platform.python_version(),
+                "cobra_version": cobra.__version__,
+                "platform": platform.platform(),
+            }
+        }
+
+        # validates already existing metadata
+        if metadata_path.exists():
+            with open(metadata_path, "r") as f:
+                existing = json.load(f)
+
+            keys_to_compare = [
+                "model_hash",
+                "reaction_tuple",
+                "constraints",
+                "n_constraints"
+            ]
+
+            for key in keys_to_compare:
+                existing_key = existing.get(key)
+                metadata_key = metadata.get(key)
+                if existing_key != metadata_key:
+                    raise RuntimeError(
+                        f"Metadata mismatch detected in {metadata_path}.\n"
+                        f"Field '{key}' differs from stored experiment:\n"
+                        f"Existing key: {existing_key}, current_key: {metadata_key}"
+                        "\n\nThis indicates a hash collision or corrupted folder."
+                    )
+            return
+
+        # writes new metadata
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=4)
+
 
 
     # =================================================== ANALYSIS DIRECTORY ===================================================
@@ -123,7 +238,7 @@ class ModelIO():
         Lx, Ly = self.modelclass.grid.grid_dimensions
         grid_dim = f"Lx_{Lx:.4f}_Ly_{Ly:.4f}"
 
-        directory = self.analysis_directory / grid_dim / subdirectory
+        directory = self._analysis_directory / grid_dim / subdirectory
         directory.mkdir(parents=True, exist_ok=True) 
 
         return directory
@@ -145,6 +260,9 @@ class ModelIO():
             - qualitative FVA: tuple
             - None if the point is not saved.
         """
+        if not self.load_files:
+            return
+
         path = self._get_point_directory(grid_point, analysis)
         if not path.exists():
             #print(f"directory doesn't exists")
@@ -152,49 +270,41 @@ class ModelIO():
 
         with open(path, 'rb') as f:
             loaded_data = pickle.load(f)
-            if analysis == "feasibility":
-                return loaded_data["is_feasible"]
-            return loaded_data["fva_tuple"]
+            return loaded_data
         
 
-    def save_feasible_point(self, grid_point: np.ndarray, is_feasible: bool, update_bounds: bool = True) -> None:
-        point_dict = {
-            "is_feasible": is_feasible,
-            "update_bounds": update_bounds,
-        }
+    def save_feasible_point(self, grid_point: np.ndarray, is_feasible: bool) -> None:
+        if not self.save_files:
+            return
         
         # making the directory to store the point
         path = self._get_point_directory(grid_point, "feasibility")
         
         with open(path, "wb") as f:
-            pickle.dump(point_dict, f)
+            pickle.dump(is_feasible, f)
 
 
-    def save_fva_result(self, grid_point: np.ndarray, fva_tuple: tuple, update_bounds: bool = True) -> None:
-        point_dict = {
-            "fva_tuple": fva_tuple,
-            "update_bounds": update_bounds
-        }
-        
+    def save_fva_result(self, grid_point: np.ndarray, fva_results: np.ndarray) -> None:
+        if not self.save_files:
+            return
+
         # making the directory to store the point
         path = self._get_point_directory(grid_point, "qual_fva")
         
         with open(path, "wb") as f:
-            pickle.dump(point_dict, f)
+            pickle.dump(fva_results, f)
 
 
     def get_clusters_directory(self) -> Path:
-        reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
-        delta = self.modelclass.grid.delta
-        n_clusters = self.modelclass.clustering.initial_n_clusters
-        filename = f"{reaction1}_{reaction2}_clusters_Delta{delta}_NC{n_clusters}.pkl"
-
+        filename = f"Clusters_{self.numeric_identifier}.pkl"
         directory = self._get_directory("clustering")
-
         return directory / filename
 
 
     def load_clusters(self) -> tuple | None:
+        if not self.load_files:
+            return
+        
         path = self.get_clusters_directory()
         if not path.exists():
             return
@@ -205,8 +315,10 @@ class ModelIO():
 
     
     def save_clusters(self, n_clusters: int, clusters: np.ndarray) -> None:
-        clusters_tuple = (n_clusters, clusters)
+        if not self.save_files:
+            return
         
+        clusters_tuple = (n_clusters, clusters)
         # making the directory to store clusters
         path = self.get_clusters_directory()
         with open(path, "wb") as f:
@@ -225,12 +337,14 @@ class ModelIO():
         metric_list: list[str] | None = None,
         overwrite: bool = False,
     ) -> None: 
-        delta = self.modelclass.grid.delta
-        file = f"{type}_NR{reaction_len}_Delta{delta}"
+        if not self.save_files:
+            return
+        
+        file = f"{type}_{self.numeric_identifier}_NR{reaction_len}"
         if metric_list is not None:
             file += f"_M{len(metric_list)}"
 
-        path = self.dataframe_directory / f"{file}.csv"
+        path = self._dataframe_directory / f"{file}.csv"
         if path.exists() and not overwrite:
             print(f"Skipping existing file: {path.name}")
             return
@@ -238,9 +352,11 @@ class ModelIO():
         df.to_csv(path, index=index, encoding='utf-8')
 
 
-    import xlsxwriter
     def merge_to_excel(self, df_dict: dict[str, pd.DataFrame]) -> None:
-        path = Path("result_files") / "DM" / "supplementary" / f"{self.analyzed_tuple_string}.xlsx"
+        if not self.save_files:
+            return
+        
+        path = RESULTS_DIRECTORY / self.model_name / "supplementary" / f"{self.analyzed_tuple_string}.xlsx"
         path.parent.mkdir(parents=True, exist_ok=True)
 
         with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
@@ -251,11 +367,11 @@ class ModelIO():
     # =================================================== PLOT DIRECTORY ===================================================
 
 
-    def save_plot_path(self, overwrite: bool = False) -> Path | None:
-        reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
-        delta = self.modelclass.grid.delta
-        n_clusters = self.modelclass.clustering.grid_n_clusters
-        path = self.plots_directory / f"{reaction1}_{reaction2}_NC{n_clusters}_Delta{delta}.png"
-        if path.exists() and not overwrite:
-            return None
+    def save_plot_path(self, extra_label: str | None = None) -> Path | None:
+        if not self.save_files:
+            return
+        
+        plot_label = f"_{extra_label}" if extra_label is not None else ""
+        path = self._plots_directory / f"Plot{plot_label}_{self.numeric_identifier}.png"
         return path
+

@@ -25,7 +25,7 @@ class DiatomPlot():
         self.diatom = diatom
 
 
-    def polytope_shape(self, delta: float):
+    def polytope_shape(self):
         """Plot the projected feasible polytope together with the sampling grid.
 
         Parameters
@@ -37,11 +37,11 @@ class DiatomPlot():
         ----
         Intended mainly for debugging geometry and projection consistency.
         """
-        self.diatom._require(polytope=True)
+        self.diatom._require(set_instance=True, polytope=True)
         poly = self.diatom.analyze.polytope
         grid = self.diatom.grid
 
-        _, lines = grid._build_grid(delta)
+        _, lines = grid._build_grid()
 
         fig, ax = plt.subplots(figsize=(5, 5))
 
@@ -251,7 +251,7 @@ class DiatomPlot():
         
         sns.barplot(x=data_to_plot.values, y=data_to_plot.index, palette="viridis")
         
-        plt.title(f"Top {top_n} Reacciones según {column}")
+        plt.title(f"Top {top_n} reactions based on {column}")
         plt.xlabel(f"Score ({column})")
         plt.ylabel("Reaction ID")
         plt.grid(axis='x', linestyle='--', alpha=0.7)

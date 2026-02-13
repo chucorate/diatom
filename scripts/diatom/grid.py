@@ -68,7 +68,7 @@ class DiatomGrid():
         self.analyzed_points: NDArray[np.bool] = np.array([])
         self.grid_dimensions: NDArray[np.floating] = np.array([0,0])
         self.points_per_axis: tuple[int, int] = (0,0)
-        self.delta: float = 0.0
+        self.grid_delta: float = 0.0
 
 
     @staticmethod
@@ -92,7 +92,7 @@ class DiatomGrid():
         return np.asarray(points, dtype=float)
 
 
-    def sample_polytope(self, delta: float, eps: float = 1e-8) -> None:
+    def sample_polytope(self, eps: float = 1e-8) -> None:
         """Sample candidate points inside and on the boundary of a 2D polytope.
 
         Constructs a set of points by combining:
@@ -122,14 +122,14 @@ class DiatomGrid():
         feasible_points : np.ndarray, shape (n_points,)
             Boolean mask indicating whether each sampled point lies within the boundaries of the polytope.
         """
-        self.diatom._require(polytope=True)
+        self.diatom._require(set_instance=True, polytope=True)
 
         poly = self.diatom.analyze.polytope
         prepared_poly = prep(poly.buffer(eps))
 
         covers_xy = getattr(prepared_poly, "covers_xy", None)
 
-        grid_points, lines = self._build_grid(delta=delta)
+        grid_points, lines = self._build_grid()
         intersect_points = self._intersection_points(lines)
         poly_vertices = np.asarray(poly.exterior.coords, dtype=float)[:-1] # type: ignore
 
@@ -150,7 +150,7 @@ class DiatomGrid():
         self.feasible_points = feasible
 
 
-    def _build_grid(self, delta: float) -> tuple[NDArray[np.floating], BaseGeometry]:
+    def _build_grid(self) -> tuple[NDArray[np.floating], BaseGeometry]:
         """Creates a 2D grid across the polytope bounding box.
         
         Parameters
@@ -172,7 +172,7 @@ class DiatomGrid():
             Geometry containing vertical and horizontal lines that define the grid sampling space.
         
         """
-        assert delta >= 0 and delta <= 1
+        delta = self.grid_delta
         poly = self.diatom.analyze.polytope
 
         minx, miny, maxx, maxy = poly.bounds
@@ -181,7 +181,7 @@ class DiatomGrid():
         self.grid_dimensions = np.array([interval_x, interval_y])
 
         dx, dy = delta * interval_x, delta * interval_y
-        self.delta = delta
+        
 
         xs = np.arange(minx, maxx + dx, dx)
         ys = np.arange(miny, maxy + dy, dy)
@@ -199,5 +199,4 @@ class DiatomGrid():
         grid_lines = unary_union(lines)
         return grid_points, grid_lines
 
-    
     

@@ -37,7 +37,7 @@ class ModelClustering():
         Linkage matrix encoding the dendrogram produced via hierarchical clustering.
 
     """
-    def __init__(self, modelclass: "BaseEcosystem | Diatom"):
+    def __init__(self, modelclass: "Diatom"):
         self.modelclass = modelclass
         self.initial_n_clusters: int = 0
         self.grid_n_clusters: int = 0
@@ -115,12 +115,11 @@ class ModelClustering():
 
         self.initial_n_clusters = initial_n_clusters
         
-        """
         loaded_clusters = self.modelclass.io.load_clusters()
         if isinstance(loaded_clusters, tuple):
             self.grid_n_clusters, self.grid_clusters = loaded_clusters
             return 
-        """
+
         qualitative_vector = self.one_hot_encode_reactions(changing)
         
         print("Clustering grid points ...") 
@@ -492,7 +491,7 @@ def _consensus_feature_selection(
 
     out = pd.DataFrame({"votes": votes, "mean_rank": mean_rank})
     out = out[votes >= min_votes]
-    out = out.sort_values(["votes", "mean_rank"], ascending=[False, True])
+    out = out.sort_values(["votes", "mean_rank"], ascending=[False, True]) # type: ignore
 
     if show:
         print(out.to_string())
