@@ -5,8 +5,8 @@ from .community import EcosystemCommunity
 from .grid import EcosystemGrid
 from .analyze import EcosystemAnalyze
 from .plot import EcosystemPlot
-from scripts.model_clustering import ModelClustering
-from scripts.model_io import ModelIO
+from src.model_clustering import ModelClustering
+from src.model_io import ModelIO
 
 class BaseEcosystem():
     """Abstract base class for ecosystem models

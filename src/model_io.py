@@ -83,7 +83,7 @@ class ModelIO():
             sort_keys=True
         )
         hash = hashlib.sha256(canonical.encode()).hexdigest()[:16]
-        initial_label = f"n_const={len(self.modelclass.constraints)}_#"
+        initial_label = f"n_const={len(self.modelclass.extra_bounds)}_#"
         hash = initial_label + hash
 
         return hash
@@ -171,14 +171,13 @@ class ModelIO():
             "model_file": self.modelclass.model_id,
             "model_hash": self.modelclass.metadata["model_hash"],
             "reaction_tuple": self.modelclass.metadata["reaction_tuple"],
-            "constraints": self.modelclass.metadata["constraints"],
-            "n_constraints": self.modelclass.metadata["n_constraints"],
-            # numerical config
-            "sampling_parameters": {
-                "n_sampling_angles": self.modelclass.projection.n_sampling_angles,
-                "grid_delta": self.modelclass.grid.grid_delta,
-                "n_clusters": self.modelclass.clustering.initial_n_clusters,
-            },
+            "bound_constraints": self.modelclass.metadata["bound_constraints"],
+            "n_bound_constraints": self.modelclass.metadata["n_bound_constraints"],
+            "metabolites": self.modelclass.metadata["metabolites"],
+            "reactions": self.modelclass.metadata["reactions"],
+            "flux_constraints": self.modelclass.metadata["flux_constraints"],
+            "use_pfba": self.modelclass.analyze.use_pfba,
+            "pfba_fraction_of_optimum": self.modelclass.analyze.pfba_fraction,
             # environment info
             "environment": {
                 "python_version": platform.python_version(),
@@ -195,8 +194,13 @@ class ModelIO():
             keys_to_compare = [
                 "model_hash",
                 "reaction_tuple",
-                "constraints",
-                "n_constraints"
+                "bound_constraints",
+                "n_bound_constraints",
+                "metabolites",
+                "reactions",
+                "flux_constraints",
+                "use_pfba",
+                "pfba_Fraction_of_optimum",
             ]
 
             for key in keys_to_compare:

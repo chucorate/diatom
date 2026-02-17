@@ -6,7 +6,7 @@ from scipy.spatial import distance
 from scipy.cluster.hierarchy import fcluster
 from scipy.cluster import hierarchy
 
-from scripts.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST, PER_REACTION_SCORE_FUNCTIONS, GLOBAL_SCORE_FUNCTIONS
+from src.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST, PER_REACTION_SCORE_FUNCTIONS, GLOBAL_SCORE_FUNCTIONS
 
 if TYPE_CHECKING:
     from ecosystem.base import BaseEcosystem

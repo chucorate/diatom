@@ -25,7 +25,7 @@ class DiatomPlot():
         self.diatom = diatom
 
 
-    def polytope_shape(self):
+    def polytope_shape(self, **kwargs):
         """Plot the projected feasible polytope together with the sampling grid.
 
         Parameters
@@ -56,7 +56,10 @@ class DiatomPlot():
         reaction1, reaction2 = self.diatom.analyze.analyzed_reactions
         ax.set_xlabel(reaction1)
         ax.set_ylabel(reaction2)
-        ax.set_title(f"Projected Feasible Polytope Shape ({reaction1} - {reaction2})")
+        title = f"Projected Feasible Polytope Shape ({reaction1} - {reaction2})"
+        for key, value in kwargs.items():
+            title += f", {key}: {value}"
+        ax.set_title(title)
         ax.grid(True)
 
         plt.tight_layout()
@@ -83,7 +86,7 @@ class DiatomPlot():
         show_boundary: bool = False, 
         show_points: bool = True,
         s: float = 12.0, 
-        alpha: float = 1.0
+        **kwargs,
     ) -> None:
         """Plot sampled grid points inside the feasible polytope, colored by cluster.
 
@@ -125,7 +128,7 @@ class DiatomPlot():
             vmin = 0.5
             vmax = k + 0.5
 
-            sc = ax.scatter(points[:, 0], points[:, 1], c=clusters, s=s, alpha=alpha, 
+            sc = ax.scatter(points[:, 0], points[:, 1], c=clusters, s=s, alpha=1.0, 
                             cmap = cmap, vmin=vmin, vmax=vmax)
             cbar = plt.colorbar(sc, ax=ax, ticks=np.arange(1, k+1))
             cbar.ax.set_yticklabels([f"C{i}" for i in range(1, k+1)])
@@ -134,7 +137,10 @@ class DiatomPlot():
         reaction1, reaction2 = self.diatom.analyze.analyzed_reactions
         ax.set_xlabel(reaction1)
         ax.set_ylabel(reaction2)
-        ax.set_title(f"Feasible Polytope Sampling ({reaction1} - {reaction2})")
+        title = f"Feasible Polytope Sampling ({reaction1} - {reaction2})"
+        for key, value in kwargs.items():
+            title += f", {key}: {value}"
+        ax.set_title(title)
         ax.grid(True)
 
         plt.tight_layout()

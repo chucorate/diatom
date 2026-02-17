@@ -6,6 +6,7 @@ from tqdm import tqdm
 from cobra import Reaction
 from cobra.flux_analysis import flux_variability_analysis
 
+
 if TYPE_CHECKING:
     from .diatom import Diatom
 
@@ -133,6 +134,9 @@ class DiatomAnalyze():
         self._empty_qual_vector: list[float] | None = None
         self._empty_fva_result: np.ndarray | None = None
 
+        self.use_pfba: bool
+        self.pfba_fraction: float
+
         self.qFCA: pd.DataFrame = pd.DataFrame()
 
 
@@ -250,7 +254,7 @@ class DiatomAnalyze():
         maximum_values = fva_results[:, 1]
         qualitative_vector = qual_translate(minimum_values, maximum_values, eps=eps)
         return list(qualitative_vector)
-
+    
 
     def _analyze_point(self, grid_point: np.ndarray, eps: float) -> tuple:
         """Analyze a single grid point of the ecosystem parameter space.
@@ -280,22 +284,22 @@ class DiatomAnalyze():
         `with community_model:` context manager. This guarantees that all changes are reverted after the 
         analysis is completed.
         """
-        
         loaded_point = self.diatom.io.load_point(grid_point, "qual_fva")
         if isinstance(loaded_point, np.ndarray):
             qualitative_vector = self._compute_qual_from_fva(loaded_point, eps=eps)
             return (qualitative_vector, loaded_point)
         
+        if not self.fva_reactions:
+            raise RuntimeError('No reactions selected for fva and clustering!')
+        
         with self.diatom.model as model:
             # fix analyzed reactions to grid point value:
             self.diatom.fix_growth_rates(model, grid_point)
 
-            # analyze feasible point
-            if not self.fva_reactions:
-                raise RuntimeError('No reactions selected for fva and clustering!')
-                    
-            #print(f"running FVA on grid point: {grid_point}")
+            if self.use_pfba:
+                self.diatom.apply_pfba_constraint(model, fraction_of_optimum=self.pfba_fraction)
                 
+            # analyze feasible point
             rxn_fva = flux_variability_analysis(model, reaction_list=self.fva_reactions) # type: ignore              
             rxn_fva = rxn_fva.loc[self.fva_reactions, :] # just to make sure reactions are in the same order as fva_reactions
             fva_results = rxn_fva.values

@@ -1,17 +1,19 @@
-from typing import cast, Iterable
+from typing import cast, Iterable, Optional, Callable
+from optlang import Constraint
 
 import numpy as np
 from numpy.typing import NDArray
 import cobra
-from cobra import Model, Reaction
+from cobra import Model, Reaction, Metabolite
 from cobra.util.solver import linear_reaction_coefficients
+from cobra.flux_analysis.parsimonious import add_pfba
 
 from .polytope import Projection
 from .analyze import DiatomAnalyze
 from .grid import DiatomGrid
 from .plot import DiatomPlot
-from scripts.model_io import ModelIO, load_model, file_hash
-from scripts.model_clustering import ModelClustering
+from src.model_io import ModelIO, load_model, file_hash
+from src.model_clustering import ModelClustering
 
 
 Numerical = int | float
@@ -70,7 +72,11 @@ class Diatom():
 
         self._is_sampling_instance_set: bool = False
         self.metadata: dict 
-        
+        self.extra_metabolites: list[dict] = []
+        self.extra_reactions: list[dict] = []
+        self.extra_flux_constraints: list = []
+        self.extra_bounds: dict
+
 
     def _set_objective_functions(self, objective_reactions_dict: dict[str, float] | None = None) -> None:
         """Set the objective function of the model.
@@ -101,8 +107,127 @@ class Diatom():
 
         print(model.objective, "\n") 
 
+
+    def add_metabolite(self, metabolite_id: str, **kwargs):
+        """Add a new metabolite to the model and record its metadata.
+
+        This is a thin wrapper around `cobra.Metabolite` that also tracks
+        user-added metabolites for reproducibility and metadata export.
+
+        Parameters
+        ----------
+        metabolite_id : str
+            Identifier of the metabolite to add. Must be unique in the model.
+
+        **kwargs
+            Keyword arguments passed directly to `cobra.Metabolite`, such as
+            `formula`, `name`, and `compartment`.
+
+        Side Effects
+        ------------
+        - Adds the metabolite to the COBRA model.
+        - Stores metabolite metadata in `self.extra_metabolites` for metadata
+          tracking and reproducibility.
+        """
+        metabolite = Metabolite(metabolite_id, **kwargs)
+        self.model.add_metabolites([metabolite])
+
+        metabolite_metadata = {"metabolite_id": metabolite_id}
+        for key, value in kwargs.items():
+            metabolite_metadata[key] = value
+        self.extra_metabolites.append(metabolite_metadata)
+
     
-    def _modify_bounds(self, bounds_dict: dict[str, tuple[Numerical, Numerical]]) -> None:
+    def add_reactions(self, reaction_coefficient_dict: dict[str, dict[str, float]]):
+        """Add new reactions to the model from stoichiometric dictionaries.
+
+        Each reaction is specified by a mapping from metabolite IDs to
+        stoichiometric coefficients. All referenced metabolites must already exist in 
+        the model.
+
+        Parameters
+        ----------
+        reaction_coefficient_dict : dict[str, dict[str, float]]
+            Mapping from reaction IDs to metabolite–coefficient dictionaries.
+            For example::
+
+                {
+                    "R1": {"A_c": -1.0, "B_c": 1.0},
+                    "R2": {"B_c": -1.0, "C_c": 1.0}
+                }
+
+        Side Effects
+        ------------
+        - Adds reactions to the COBRA model.
+        - Records reaction definitions in `self.extra_reactions` for metadata
+          tracking and reproducibility.
+
+        Notes
+        -----
+        Bounds, objective coefficients, and gene rules are not set here and
+        must be defined separately if needed.
+        """
+        reactions = []
+        for reaction_name, reaction_dict in reaction_coefficient_dict.items():
+            reaction = Reaction(reaction_name)
+            metabolite_coeff_dict = {
+                cast(Metabolite, self.model.metabolites.get_by_id(reaction_id)): value
+                for reaction_id, value in reaction_dict.items()
+            }
+            reaction.add_metabolites(metabolite_coeff_dict)
+            reactions.append(reaction)
+
+        self.model.add_reactions(reactions)
+        self.extra_reactions.append(reaction_coefficient_dict)
+
+
+    def add_flux_constraint(self, reaction_coefficient_dict: dict[str, float], **kwargs) -> None:
+        """Add a linear constraint involving reaction fluxes.
+
+        This method constructs a linear expression of the form::
+
+            sum_i c_i * v_i
+
+        where ``v_i`` are reaction flux variables and `c_i` are user-specified
+        coefficients, and adds it to the solver as a constraint.
+
+        Parameters
+        ----------
+        reaction_coefficient_dict : dict[str, float]
+            Mapping from reaction IDs to linear coefficients. Each entry
+            contributes `coefficient * reaction_flux` to the constraint
+            expression.
+
+        **kwargs
+            Additional arguments passed directly to `optlang.Constraint`,
+            typically including `lb`, `ub`, and `name`.
+
+        Side Effects
+        ------------
+        - Adds a linear constraint to the model's solver.
+        - Records the constraint definition in `self.extra_flux_constraints`
+          for metadata tracking and reproducibility.
+
+        Notes
+        -----
+        - Only linear constraints are supported.
+        - Reaction IDs must exist in the model.
+        """
+        expr = sum(
+            c * cast(Reaction, self.model.reactions.get_by_id(r)).flux_expression #  type: ignore
+            for r, c in reaction_coefficient_dict.items()
+        )
+
+        constraint = Constraint(expr, **kwargs)
+        self.model.add_cons_vars([constraint])
+
+        bound_metadata = {"expression": reaction_coefficient_dict}
+        for key, value in kwargs.items():
+            bound_metadata[key] = value
+        self.extra_flux_constraints.append(bound_metadata)
+
+    
+    def modify_bounds(self, bounds_dict: dict[str, tuple[Numerical, Numerical]]) -> None:
         """Modify reaction bounds in the model.
 
         Parameters
@@ -113,6 +238,8 @@ class Diatom():
         for reaction_id, bounds in bounds_dict.items():
             reaction = cast(Reaction, self.model.reactions.get_by_id(reaction_id))
             reaction.bounds = bounds
+
+        self.extra_bounds = bounds_dict
 
 
     def _set_non_blocked_reactions(self) -> None:
@@ -133,8 +260,8 @@ class Diatom():
 
         IMPORTANT: This method must be called *only* inside a model context manager, e.g.::
 
-            with community_model:
-                community.apply_member_fraction_bounds(community_model, fractions)
+            with model:
+                self.fix_growth_rates(model, grid_point)
                 
         Otherwise, reaction bounds will be permanently modified.
 
@@ -153,6 +280,41 @@ class Diatom():
             value = grid_point[index]
             reaction = cast(Reaction, mirror_model.reactions.get_by_id(reaction_id))
             reaction.bounds = (value, value)    
+
+    
+    def apply_pfba_constraint(self, mirror_model: Model, fraction_of_optimum: float = 1.0) -> None:
+        """Restrict the model to parsimonious solutions.
+
+        This adds the standard pFBA constraints:
+        - Restricts the model to parsimonious flux distributions compatible with the fixed growth rates.
+        - Minimizes total absolute flux.
+
+        IMPORTANT: This method must be called *only* inside a model context manager, e.g.::
+
+            with model:
+                self.apply_pfba_constraint(model, fraction_of_optimum)
+                
+        Otherwise, reaction bounds will be permanently modified.
+
+        Parameters
+        ----------
+        mirror_community_model : cobra.Model
+            Community model that will be temporarily set to pFBA constraints.
+
+        fraction_of_optimum : float, default=1.0
+            Fraction of optimum which must be maintained. 
+            The original objective reaction is constrained to be greater than 
+            maximal value times the `fraction_of_optimum`.
+        """
+        sol = mirror_model.optimize()
+        if sol.status != "optimal":
+            raise RuntimeError("FBA failed before pFBA")
+
+        # add standard pFBA machinery
+        add_pfba(mirror_model, fraction_of_optimum=fraction_of_optimum)
+
+        # solve once to activate constraints
+        mirror_model.optimize()
 
 
     def _require(
@@ -189,12 +351,13 @@ class Diatom():
 
     def set_sampling_instance(
         self,
-        constraints: dict[str, tuple[Numerical, Numerical]],
         reaction_tuple: tuple[str, str],
-        grid_delta: float,
-        n_clusters: int,
-        save_files: bool,
-        load_files: bool,
+        grid_delta: float = 0.02,
+        n_clusters: int = 10,
+        use_pfba: bool = False,
+        fraction_of_optimum: float = 1.0,
+        save_files: bool = False,
+        load_files: bool = False,
     ) -> None:
         """Configure and initialize a sampling experiment for the current diatom model.
 
@@ -274,14 +437,10 @@ class Diatom():
         for reaction_id in reaction_tuple:
             assert reaction_id in self.model.reactions
 
-        for reaction_id, constraint in constraints.items():
-            assert reaction_id in self.model.reactions
-            lb, ub = constraint
-            assert isinstance(lb, Numerical) and isinstance(ub, Numerical)
-            constraints[reaction_id] = (round(lb, 6), round(ub, 6))
-
-        constraints = dict(sorted(constraints.items()))
-        self.constraints = constraints
+        constraints = dict(sorted(self.extra_bounds.items()))
+        constraints_list = {k: list(v) for k, v in constraints.items()}
+        n_constraints = len(constraints_list) 
+        self.extra_bounds = constraints
 
         assert isinstance(grid_delta, float) and grid_delta > 0 and grid_delta <= 1
         assert isinstance(n_clusters, int) and n_clusters > 0
@@ -290,7 +449,6 @@ class Diatom():
 
         # set parameters
         self._set_objective_functions({reaction_tuple[1]: 1.0})
-        self._modify_bounds(constraints)
 
         self.analyze.analyzed_reactions = reaction_tuple
         self.grid.grid_delta = grid_delta
@@ -299,17 +457,26 @@ class Diatom():
         self.io.save_files = save_files
         self.io.load_files = load_files
 
+        self.analyze.use_pfba = use_pfba
+        self.analyze.pfba_fraction = fraction_of_optimum
+
         # metadata handling
         metadata = {
             "model_filename": self.model_id,
             "model_hash": file_hash(self.model_id),
-            "constraints": {k: list(v) for k, v in constraints.items()}, # to ensure json compatibility
-            "n_constraints": len(constraints),
             "reaction_tuple": list(reaction_tuple), # to ensure json compatibility
+            "bound_constraints": constraints_list, # to ensure json compatibility
+            "n_bound_constraints": n_constraints,
+            "metabolites": self.extra_metabolites,
+            "reactions": self.extra_reactions,
+            "flux_constraints": self.extra_flux_constraints,
+            "use_pfba": use_pfba,
+            "pfba_fraction_of_optimum": fraction_of_optimum,
         }
         self.metadata = metadata
 
         message = f"Generated hash '{self.io.sampling_hash}' for current sampling metadata:\n"
+        
         for key, value in metadata.items():
             message += f"{key}: {value}\n"
         
