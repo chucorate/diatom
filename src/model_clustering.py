@@ -6,7 +6,8 @@ from scipy.spatial import distance
 from scipy.cluster.hierarchy import fcluster
 from scipy.cluster import hierarchy
 
-from src.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST, PER_REACTION_SCORE_FUNCTIONS, GLOBAL_SCORE_FUNCTIONS
+from src.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST
+from src.feature_selection import PER_REACTION_SCORE_FUNCTIONS, GLOBAL_SCORE_FUNCTIONS
 
 if TYPE_CHECKING:
     from ecosystem.base import BaseEcosystem
@@ -349,6 +350,8 @@ class ModelClustering():
         metric_names = [metric.__name__ for metric in REACTION_METRIC_LIST]
 
         rows: list[dict[str, Any]] = []
+        not_available: int = 0
+
         for reaction_id in reaction_list:
             reaction_index = fva_reactions.index(reaction_id)
             reaction_fva_results = (fva_results[:, reaction_index, :])
