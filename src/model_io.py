@@ -1,10 +1,11 @@
-from typing import TYPE_CHECKING, Literal
-from pathlib import Path
-from datetime import datetime
+import logging
 import pickle
 import hashlib
 import json
 import platform
+from typing import TYPE_CHECKING, Literal, Any
+from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,6 @@ from cobra import Model
 import xlsxwriter
 
 if TYPE_CHECKING:
-    from ecosystem.base import BaseEcosystem
     from diatom.diatom import Diatom
 
 
@@ -57,7 +57,28 @@ def save_models(model_dict: dict[str, Model]) -> None:
     for model_name, model in model_dict.items():
         filename = MODEL_DIRECTORY / f"{model_name}.xml"
         cobra.io.write_sbml_model(model, filename)
-        print(f'model {model_name} stored')
+        logging.info(f'model {model_name} stored')
+
+
+def canonicalize(obj: Any) -> Any:
+    """Standarizes the metadata dictionary in order to ensure json format
+    compatibility, and to avoid producing different hashes with the same data
+    inputed in different ways."""
+    if isinstance(obj, dict):
+        return {x: canonicalize(obj[x]) for x in sorted(obj)}
+
+    if isinstance(obj, (list, tuple, set)):
+        obj = [canonicalize(x) for x in obj]
+        return list(sorted(obj, key=repr))
+
+    if isinstance(obj, float | int):
+        obj = float(round(obj, 6)) if abs(obj) > 1e-6 else 0.0
+        return str(obj)
+
+    if isinstance(obj, (str, bool)) or obj is None:
+        return obj
+
+    raise TypeError(f"Unhashable type in metadata: {obj: type(obj)}")
 
 
 class ModelIO():
@@ -73,17 +94,15 @@ class ModelIO():
         self.model_name: str = model_name
         self.save_files: bool = False
         self.load_files: bool = False
+        self.experiment_tag: str
 
 
     @property
     def sampling_hash(self) -> str:
         """Hash used to uniquely identify a sampling instance by its specified parameters."""
-        canonical = json.dumps(
-            dict(sorted(self.modelclass.metadata.items())),
-            sort_keys=True
-        )
+        canonical = json.dumps(self.modelclass.metadata)
         hash = hashlib.sha256(canonical.encode()).hexdigest()[:16]
-        initial_label = f"n_const={len(self.modelclass.extra_bounds)}_#"
+        initial_label = f"{self.experiment_tag}_#"
         hash = initial_label + hash
 
         return hash
@@ -96,10 +115,10 @@ class ModelIO():
         Assumes a sampling hash has already been set, and using it alongside the numeric identifier
         files can be saved and loaded safely without overwriting previous results."""
         n_sampling_angles = self.modelclass.projection.n_sampling_angles
-        grid_delta = self.modelclass.grid.grid_delta
-        initial_n_clusters = self.modelclass.clustering.initial_n_clusters
+        n_partitions = self.modelclass.grid.n_partitions
+        n_clusters = self.modelclass.clustering.grid_n_clusters
 
-        identifier = f"SA{n_sampling_angles}_D{round(grid_delta, 6)}_NC{initial_n_clusters}"
+        identifier = f"SA{n_sampling_angles}_NP{n_partitions}_NC{n_clusters}"
         return identifier
 
 
@@ -157,7 +176,7 @@ class ModelIO():
         If it exists, its biological identity is validated against the
         current experiment configuration. A mismatch raises an error.
         """
-        if not self.save_files:
+        if not (self.save_files or self.load_files):
             return
 
         path = self.results_directory
@@ -166,23 +185,19 @@ class ModelIO():
         metadata_path = path / "metadata.json"
         metadata = {
             "experiment_hash": self.sampling_hash,
-            "created_at": datetime.now().isoformat(),
-            # biological identity
             "model_file": self.modelclass.model_id,
             "model_hash": self.modelclass.metadata["model_hash"],
             "reaction_tuple": self.modelclass.metadata["reaction_tuple"],
-            "bound_constraints": self.modelclass.metadata["bound_constraints"],
-            "n_bound_constraints": self.modelclass.metadata["n_bound_constraints"],
             "metabolites": self.modelclass.metadata["metabolites"],
             "reactions": self.modelclass.metadata["reactions"],
+            "bound_constraints": self.modelclass.metadata["bound_constraints"],
             "flux_constraints": self.modelclass.metadata["flux_constraints"],
             "use_pfba": self.modelclass.analyze.use_pfba,
             "pfba_fraction_of_optimum": self.modelclass.analyze.pfba_fraction,
-            # environment info
             "environment": {
                 "python_version": platform.python_version(),
-                "cobra_version": cobra.__version__,
                 "platform": platform.platform(),
+                "created_at": datetime.now().isoformat(),
             }
         }
 
@@ -194,10 +209,9 @@ class ModelIO():
             keys_to_compare = [
                 "model_hash",
                 "reaction_tuple",
-                "bound_constraints",
-                "n_bound_constraints",
                 "metabolites",
                 "reactions",
+                "bound_constraints",
                 "flux_constraints",
                 "use_pfba",
                 "pfba_Fraction_of_optimum",
@@ -211,7 +225,7 @@ class ModelIO():
                         f"Metadata mismatch detected in {metadata_path}.\n"
                         f"Field '{key}' differs from stored experiment:\n"
                         f"Existing key: {existing_key}, current_key: {metadata_key}"
-                        "\n\nThis indicates a hash collision or corrupted folder."
+                        "\n\nThere exists a hash collision."
                     )
             return
 
@@ -269,7 +283,7 @@ class ModelIO():
 
         path = self._get_point_directory(grid_point, analysis)
         if not path.exists():
-            #print(f"directory doesn't exists")
+            logging.debug(f"Directory doesn't exists: {path}")
             return
 
         with open(path, 'rb') as f:
@@ -350,7 +364,7 @@ class ModelIO():
 
         path = self._dataframe_directory / f"{file}.csv"
         if path.exists() and not overwrite:
-            print(f"Skipping existing file: {path.name}")
+            logging.warning(f"Skipping existing file: {path.name}")
             return
         
         df.to_csv(path, index=index, encoding='utf-8')

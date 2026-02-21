@@ -23,12 +23,19 @@ def coefficient_of_variation(fva_result: np.ndarray, eps: float = EPS, **kwargs)
     return float(np.std(ranges) / (np.mean(ranges) + eps))
 
 
-def mca_score(qual_vector_df: pd.DataFrame, n_components: int = 5, state_prefix: str = "s", min_nunique: int = 2, random_state: int = 42, **kwargs) -> pd.Series:
+def mca_score(
+    qualitative_matrix: pd.DataFrame, 
+    n_components: int = 5, 
+    state_prefix: str = "s", 
+    min_nunique: int = 2, 
+    random_state: int = 42, 
+    **kwargs
+) -> pd.Series:
     """Unsupervised reaction relevance score using Multiple Correspondence Analysis."""
-    informative_cols = qual_vector_df.columns[qual_vector_df.nunique(dropna=True) >= min_nunique]
+    informative_cols = qualitative_matrix.columns[qualitative_matrix.nunique(dropna=True) >= min_nunique]
     if len(informative_cols) == 0:
         raise ValueError("No hay reacciones con variabilidad suficiente para MCA.")
-    Q = qual_vector_df[informative_cols].copy()
+    Q = qualitative_matrix[informative_cols].copy()
 
     # force categorical data type
     X_cat = Q.fillna("NaN").astype(int, errors="ignore").astype(str)
@@ -113,19 +120,19 @@ def mutual_information(reaction_states: np.ndarray, clusters: np.ndarray, **kwar
     return float(mutual_info_score(reaction_states, clusters))
 
 
-def rf_importance(qual_vector_df: pd.DataFrame, grid_clusters: np.ndarray, n_estimators: int = 100, **kwargs) -> pd.Series:
+def rf_importance(qualitative_matrix: pd.DataFrame, grid_clusters: np.ndarray, n_estimators: int = 100, **kwargs) -> pd.Series:
     """Reaction importance based on Random Forest prediction of cluster labels."""
-    if qual_vector_df.empty or grid_clusters.size == 0:
+    if qualitative_matrix.empty or grid_clusters.size == 0:
         raise RuntimeError("Datos insuficientes (DF vacío o clusters no calculados).")
 
-    X = qual_vector_df.values
+    X = qualitative_matrix.values
     y = grid_clusters
 
     rf = RandomForestClassifier(n_estimators=n_estimators, random_state=42, class_weight='balanced')
     rf.fit(X, y)
 
     importances = rf.feature_importances_
-    feature_importance_series = pd.Series(importances, index=qual_vector_df.columns).sort_values(ascending=False)
+    feature_importance_series = pd.Series(importances, index=qualitative_matrix.columns).sort_values(ascending=False)
 
     return feature_importance_series
 

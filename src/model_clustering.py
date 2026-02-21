@@ -1,3 +1,4 @@
+import logging
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -39,7 +40,6 @@ class ModelClustering():
     """
     def __init__(self, modelclass: "Diatom"):
         self.modelclass = modelclass
-        self.initial_n_clusters: int = 0
         self.grid_n_clusters: int 
         self.grid_clusters: np.ndarray 
         self.linkage_matrix: np.ndarray 
@@ -47,11 +47,11 @@ class ModelClustering():
 
 
     @property
-    def qual_vector(self) -> pd.DataFrame:
-        return self.modelclass.analyze.qual_vector
+    def qualitative_matrix(self) -> pd.DataFrame:
+        return self.modelclass.analyze.qualitative_matrix
 
 
-    def one_hot_encode_reactions(self, changing: bool = True) -> np.ndarray:
+    def one_hot_encode_reactions(self, changing: bool) -> np.ndarray:
         """One hot encodes qualitative states. 
         
         Optionally restrict qualitative vectors to reactions whose qualitative
@@ -67,26 +67,19 @@ class ModelClustering():
         encoded_reactions : np.ndarray
             One-hot encoded qualitative matrix (grid x features).
         """
-        z = self.qual_vector.copy()
+        z = cast(pd.DataFrame, self.qualitative_matrix.copy())
 
         if changing:
-            changed_rxns = self.qual_vector.max(axis=0) != self.qual_vector.min(axis=0)
+            changed_rxns = self.qualitative_matrix.max(axis=0) != self.qualitative_matrix.min(axis=0)
             changed_rxns_ids = z.columns[changed_rxns]
             z = z[changed_rxns_ids]
 
-        #print(f"changing reaction: {self.qual_vector_df.values.shape} -> {changed_rxns.sum()}")
         z_one_hot = pd.get_dummies(z.astype(str))
-        print(f"base: {z.shape} -> one-hot: {z_one_hot.shape}")
+        logging.debug(f"base: {z.shape} -> one-hot: {z_one_hot.shape}")
         return z_one_hot.values
         
 
-    def set_grid_clusters(
-        self, 
-        method: str, 
-        changing: bool = True, 
-        initial_n_clusters: int = 20, 
-        **kwargs
-    ) -> None:
+    def set_grid_clusters(self, n_clusters: int, method: str, changing: bool = True, **kwargs) -> None:
         """Cluster grid points based on qualitative flux vectors.
 
         Uses pairwise Jaccard distances between grid points and stores the resulting
@@ -112,24 +105,36 @@ class ModelClustering():
         linkage_matrix : np.ndarray, shape (n_points-1, 4)
             Linkage matrix encoding the dendrogram produced via hierarchical clustering.
         """
-        self.modelclass._require(qual_vector=True)
-
-        self.initial_n_clusters = initial_n_clusters
+        self.modelclass._require(qualitative_matrix=True)
         
+        self.initial_n_clusters = n_clusters
+        
+        """
         loaded_clusters = self.modelclass.io.load_clusters()
         if isinstance(loaded_clusters, tuple):
             self.grid_n_clusters, self.grid_clusters = loaded_clusters
-            #return 
+            return 
+        """
 
         qualitative_vector = self.one_hot_encode_reactions(changing)
         
-        print("Clustering grid points ...") 
-        self.grid_n_clusters, self.grid_clusters, self.linkage_matrix = self._map_clusters(method, qualitative_vector, **kwargs)
+        logging.info("Clustering grid points ...") 
+        self.grid_n_clusters, self.grid_clusters, self.linkage_matrix = (
+            self._map_clusters(qualitative_vector, n_clusters, method, **kwargs)
+        )
         self.modelclass.io.save_clusters(self.grid_n_clusters, self.grid_clusters)
 
 
-    def _map_clusters(self, method: str, qualitative_vector: np.ndarray, **kwargs) -> tuple[int, np.ndarray, np.ndarray]:
-        """Computed pairwise Jaccard distances and applies a clustering method.
+    @staticmethod
+    def _map_clusters(
+        qualitative_vector: np.ndarray, 
+        n_clusters: int, 
+        method: str, 
+        criterion: str = 'maxclust', 
+        metric: str = 'jaccard', 
+        **kwargs,
+    ) -> tuple[int, np.ndarray, np.ndarray]:
+        """Computed pairwise Jaccard distances and performs hierarchical clustering.
 
         Returns
         -------
@@ -140,16 +145,15 @@ class ModelClustering():
         linkage_matrix : np.ndarray, shape (n_points-1, 4)
             Hierarchical linkage matrix.
         """
-        distance_metric = 'jaccard'
-        dvector = distance.pdist(qualitative_vector, distance_metric) 
-        #dmatrix = distance.squareform(dvector)     
+        dvector = distance.pdist(qualitative_vector, metric) # type: ignore
 
-        if method == 'hierarchical':
-            n_clusters, clusters, linkage_matrix = _get_hierarchical_clusters(dvector,**kwargs)
-        else:
-            raise ValueError(f"Unknown method: {method}")
+        linkage_matrix = hierarchy.linkage(dvector, method=method)
+        clusters = fcluster(linkage_matrix, t=n_clusters, criterion=criterion, **kwargs) # clusters are indexed from 1
+
+        n_clusters = len(np.unique(clusters))
         
-        print(f"Done! n_clusters: {n_clusters}")    
+        logging.info(f"Done! Obtained {n_clusters} from hierarchical clustering.")
+        logging.debug(f"method: {method}, criterion: {criterion}, metric: {metric}.")    
         return n_clusters, clusters, linkage_matrix
 
 
@@ -166,13 +170,12 @@ class ModelClustering():
          
         # qualitative value present if at least threshold of reactions in cluster  
         return representative[0] if representative.size > 0 else None
-         
+
 
     def get_grid_cluster_qual_profiles(
         self, 
         threshold: float = 0.75,
         changing: bool = True, 
-        convert: bool = True,
         selected_reactions: list[str] | None = None,
         overwrite: bool = False,
     ) -> pd.DataFrame:
@@ -189,8 +192,6 @@ class ModelClustering():
             same qualitative value to be considered representative.
         changing : bool, default=True
             If True, only reactions whose representative values differ across clusters are retained.
-        convert : bool, default=True
-            If True, integer qualitative codes are mapped using `analyze.category_dict`.
         selected_reactions : list[str] | None, default=None
             Optional list of reaction IDs to subset the result.
         overwrite : bool, default=False
@@ -202,14 +203,14 @@ class ModelClustering():
             Rows correspond to reactions and columns to clusters (``c1, c2, ...``).
             Entries are representative qualitative values or NaN.
         """
-        self.modelclass._require(qual_vector=True, clusters=True)
+        self.modelclass._require(qualitative_matrix=True, clusters=True)
         
-        vector_df = self.qual_vector.astype('int32')
+        vector_df = self.qualitative_matrix.astype('int32')
 
         cluster_ids = np.arange(1, self.grid_n_clusters + 1)
-        #print(f"cluster_ids: {cluster_ids}, grid_clusters: {self.grid_clusters}")
         cluster_dfs = [vector_df[self.grid_clusters == cluster_id] for cluster_id in cluster_ids]
-        print(f"cluster_dfs len: {len(cluster_dfs)}")
+        logging.debug(f"cluster_dfs len: {len(cluster_dfs)}")
+
         representatives_list = [
             cluster_df.apply(
                 self._get_representative_qualitative_values,
@@ -223,22 +224,19 @@ class ModelClustering():
 
         analyze = self.modelclass.analyze
 
-        if changing: # report only reactions that have different qualitative values in at least two clusters
+        if changing:
             changing_filter = representatives.apply(lambda x: x.unique().size > 1, axis = 1)    
             representatives = representatives[changing_filter]
         
-        if convert:
-            representatives = representatives.replace(analyze.category_dict)
+        if selected_reactions:
+            representatives = representatives.loc[selected_reactions] 
 
-        reaction_len = len(selected_reactions) if selected_reactions is not None else -1
-        representatives = (representatives.loc[selected_reactions] 
-                           if selected_reactions else 
-                           representatives.loc[self.modelclass.analyze.fva_reactions])
+        representatives = representatives.replace(analyze.category_dict)
        
         self.modelclass.io.save_cluster_df(
             representatives, 
             "Qualitative_profiles", 
-            reaction_len=reaction_len, 
+            reaction_len=len(selected_reactions) if selected_reactions is not None else -1, 
             index=True, 
             overwrite=overwrite,
         )
@@ -246,17 +244,39 @@ class ModelClustering():
         return representatives
     
 
-    def n_clusters_score(self, threshold: float, selected_reactions: list[str] | None = None) -> tuple[float, pd.Series]:
-        self.modelclass._require(clusters=True, qual_vector=True)
+    def n_clusters_score(self, threshold: float) -> tuple[float, pd.Series]:
+        """Computes agreement scores between qualitative states and
+        cluster representative profiles for each reaction.
 
-        reaction_list = selected_reactions if selected_reactions is not None else self.modelclass.analyze.fva_reactions
+        This method counts the fraction of grid points whose qualitative state matches 
+        the representative qualitative value of their assigned cluster. 
 
-        n_points = self.qual_vector.shape[0]
-        qual_states = self.qual_vector[reaction_list].replace(self.modelclass.analyze.category_dict)
+        A reaction is considered to be successfully represented if its score is greater 
+        than or equal  to `threshold`.
+
+        Parameters
+        ----------
+        threshold : float
+            Minimum agreement fraction required for a reaction to be considered
+            successful.
+
+        Returns
+        -------
+        success_ratio : float
+            Fraction of reactions whose agreement score is greater than or equal
+            to `threshold`.
+        scores : pd.Series
+            Reaction-wise agreement scores indexed by reaction ID.
+        """
+        self.modelclass._require(clusters=True, qualitative_matrix=True)
+
+        reaction_list = self.representatives.index.tolist()
+
+        n_points = self.qualitative_matrix.shape[0]
+        qual_states = self.qualitative_matrix[reaction_list].replace(self.modelclass.analyze.category_dict)
         
         n_clusters = self.grid_n_clusters
         cluster_masks = {cluster_id: self.grid_clusters == cluster_id for cluster_id in range(1, n_clusters+1)}
-
     
         scores_dict: dict[str, float] = {}
         for reaction_id in reaction_list:
@@ -272,31 +292,10 @@ class ModelClustering():
             scores_dict[reaction_id] = reaction_score / n_points
 
         scores = pd.Series(scores_dict)
-        success_ratio = (scores >= threshold).mean()
+        success_ratio = float((scores >= threshold).mean())
 
         return success_ratio, scores
 
-
-    @staticmethod
-    def compare_clusters(clusters_df: pd.DataFrame, cluster_id1: str | int, cluster_id2: str | int) -> pd.DataFrame:
-        """Compare qualitative values between two clusters.
-        
-        Returns a dataframe whose rows only display qualitative values that are different between 
-        the clusters."""
-    
-        if isinstance(cluster_id1, int):
-            cluster_id1 = 'c%d' % cluster_id1
-        if isinstance(cluster_id2, int):
-            cluster_id2 = 'c%d' % cluster_id2            
-        
-        comparative_df = clusters_df[[cluster_id1, cluster_id2]]
-        
-        # filter out rows where the two clusters share values
-        changing_filter = comparative_df[cluster_id1] != comparative_df[cluster_id2]
-        comparative_df = comparative_df[changing_filter]
-
-        return comparative_df
-    
 
     def get_cluster_global_metrics(self, reaction_list: list[str], overwrite: bool = False) -> pd.DataFrame:
         """Compute global metrics for each grid cluster.
@@ -333,17 +332,24 @@ class ModelClustering():
 
         rows: list[dict[str, Any]] = []
         for cluster_index in range(1, self.grid_n_clusters+1):
-            metric_results = [metric(fva_reactions, fva_results, grid_clusters, cluster_index) for metric in GLOBAL_METRIC_LIST]
+            metric_results = [
+                metric(fva_reactions, fva_results, grid_clusters, cluster_index) 
+                for metric in GLOBAL_METRIC_LIST
+            ]
 
             for metric_name, metric_value in zip(metric_names, metric_results):
                 rows.append({
-                    "cluster": cluster_index,
-                    "metric": metric_name,
-                    "value": metric_value
+                    "cluster": cluster_index, "metric": metric_name, "value": metric_value
                 })
 
         df = pd.DataFrame(rows)
-        self.modelclass.io.save_cluster_df(df, "Global_metrics", reaction_len=len(reaction_list), metric_list=GLOBAL_METRIC_LIST, overwrite=overwrite)
+        self.modelclass.io.save_cluster_df(
+            df, 
+            "Global_metrics", 
+            reaction_len=len(reaction_list), 
+            metric_list=GLOBAL_METRIC_LIST, 
+            overwrite=overwrite,
+        )
         return df
     
 
@@ -401,11 +407,19 @@ class ModelClustering():
                     })
 
         df = pd.DataFrame(rows)
-        self.modelclass.io.save_cluster_df(df, "Metrics_per_reaction", reaction_len=len(reaction_list), metric_list=REACTION_METRIC_LIST, overwrite=overwrite)
+        self.modelclass.io.save_cluster_df(
+            df, 
+            "Metrics_per_reaction", 
+            reaction_len=len(reaction_list), 
+            metric_list=REACTION_METRIC_LIST, 
+            overwrite=overwrite,
+        )
         return df
 
     
-    def reaction_scores(self, sort_score: bool = True, sort_index: int = 0, **kwargs) -> tuple[pd.DataFrame, list[str]]:
+    def reaction_scores(
+        self, sort_score: bool = True, sort_index: int = 0, **kwargs
+    ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
         """Compute reaction-level scores and perform consensus feature selection.
 
         This method evaluates multiple scoring functions at the reaction level,
@@ -427,108 +441,97 @@ class ModelClustering():
         - Per-reaction score functions additionally depend on the linkage matrix
         and reaction-specific FVA results.
         """
-        self.modelclass._require(clusters=True, qual_vector=True)
+        self.modelclass._require(clusters=True, qualitative_matrix=True)
 
-        df = pd.DataFrame(index=self.qual_vector.columns)
+        scores_df = pd.DataFrame(index=self.qualitative_matrix.columns)
 
         for score_func in GLOBAL_SCORE_FUNCTIONS:
-            df[score_func.__name__] = score_func(qual_vector_df=self.qual_vector, grid_clusters=self.grid_clusters)
+            scores_df[score_func.__name__] = score_func(qualitative_matrix=self.qualitative_matrix, grid_clusters=self.grid_clusters)
 
         for score_func in PER_REACTION_SCORE_FUNCTIONS:
             func_name = score_func.__name__
             scores = []
-            for rid in self.qual_vector.columns:
+            for rid in self.qualitative_matrix.columns:
                 fva_reactions = self.modelclass.analyze.fva_reactions
                 fva_results = self.modelclass.analyze.fva_results
                 reaction_index = fva_reactions.index(rid)
                 val = score_func(
-                    reaction_states=self.qual_vector[rid].values,
+                    reaction_states=self.qualitative_matrix[rid].values,
                     clusters=self.grid_clusters,
                     fva_result = (fva_results[:, reaction_index, :])
                 )
                 scores.append(val)
-            df[func_name] = scores
+            scores_df[func_name] = scores
 
-        col_to_sort = df.columns[sort_index] if sort_index < len(df.columns) else df.columns[0]
+        col_to_sort = scores_df.columns[sort_index] if sort_index < len(scores_df.columns) else scores_df.columns[0]
         if sort_score:
-            df = df.sort_values(by=col_to_sort, ascending=False)
+            scores_df = scores_df.sort_values(by=col_to_sort, ascending=False)
 
         metric_names = [f.__name__ for f in GLOBAL_SCORE_FUNCTIONS] + [f.__name__ for f in PER_REACTION_SCORE_FUNCTIONS]
-        feature_selection = _consensus_feature_selection(df, metric_names, **kwargs)
+        rank_df, feature_selection = self._consensus_feature_selection(scores_df, metric_names, **kwargs)
+        logging.info(f"Number of reactions selected: {len(feature_selection)}\n")
 
-        return df, feature_selection
+        return scores_df, rank_df, feature_selection
     
 
-# ======================================================= CLUSTER FUNCTIONS =======================================================
+    @staticmethod
+    def _consensus_feature_selection(
+        score_df: pd.DataFrame, score_cols: list[str], top_T: int = 40, min_votes: int = 2, **kwargs,
+    ) -> tuple[pd.DataFrame, list[str]]:
+        """Consensus feature selection via top-T voting across multiple scores.
 
-def _get_hierarchical_clusters(
-    dvector: np.ndarray, 
-    k: int = 20, 
-    lmethod: str = 'complete', 
-    criterion: str= 'maxclust', 
-    **kwargs
-) -> tuple[int, np.ndarray, np.ndarray]:
-    """Performs hierarchical clustering."""
-    linkage_matrix = hierarchy.linkage(dvector, method=lmethod)
-    clusters = fcluster(linkage_matrix, t=k, criterion=criterion)
+        Parameters
+        ----------
+        score_df : pd.DataFrame
+            Index = reaction_id, columns = scores
+        score_cols : list of str
+            Columns to use as scores
+        top_T : int
+            Top-T reactions per score
+        min_votes : int or None
+            Minimum number of appearances required. 
 
-    k = len(np.unique(clusters))
-    return k, clusters, linkage_matrix # clusters are indexed from 1
+        Returns
+        -------
+        rank_df : DataFrame
+            Per-metric rank positions (1 = best).
+        selected_reactions : list[str]
+            Reactions selected by consensus voting.
+        """
+        rank_df = pd.DataFrame(
+            {col: score_df[col].rank(ascending=False, method="average") for col in score_cols},
+            index=score_df.index,
+        )
 
+        topT_mask = rank_df <= top_T
+        votes = topT_mask.sum(axis=1)
 
-def _consensus_feature_selection(
-    score_df: pd.DataFrame, 
-    score_cols: list[str], 
-    k: int = 30, 
-    min_votes: int | None = 2, 
-    normalize: bool = True, 
-    show: bool = True,
-    **kwargs,
-) -> list[str]:
-    """
-    Consensus feature selection via top-k voting across multiple scores.
+        rank_df["votes"] = votes
+        rank_df = rank_df[votes >= min_votes]
+        rank_df = rank_df.sort_values(["votes"], ascending=[False]) # type: ignore
 
-    Parameters
-    ----------
-    df : DataFrame
-        Index = reaction_id, columns = scores
-    score_cols : list of str
-        Columns to use as scores
-    k : int
-        Top-k reactions per score
-    min_votes : int or None
-        Minimum number of appearances required. If None, uses majority rule.
-    normalize : bool
-        Rank-based normalization per score
+        reaction_selection = list(rank_df.index)
+        return rank_df, reaction_selection
+    
 
-    Returns
-    -------
-    DataFrame sorted by votes and mean rank
-    """
-    ranks = {}
+    @staticmethod
+    def compare_clusters(
+        clusters_df: pd.DataFrame, cluster_id1: str | int, cluster_id2: str | int
+    ) -> pd.DataFrame:
+        """Compare qualitative values between two clusters.
+        
+        Returns a dataframe whose rows only display qualitative values that are different between 
+        the clusters."""
+        if isinstance(cluster_id1, int):
+            cluster_id1 = 'c%d' % cluster_id1
+        if isinstance(cluster_id2, int):
+            cluster_id2 = 'c%d' % cluster_id2            
+        
+        comparative_df = clusters_df[[cluster_id1, cluster_id2]]
+        
+        # filter out rows where the two clusters share values
+        changing_filter = comparative_df[cluster_id1] != comparative_df[cluster_id2]
+        comparative_df = comparative_df[changing_filter]
 
-    for col in score_cols:
-        s = score_df[col].copy()
-        r = s.rank(ascending=False, method="average") if normalize else s
-        ranks[col] = r
-
-    rank_df = pd.DataFrame(ranks)
-    mean_rank = rank_df.mean(axis=1)
-
-    # top-k mask per score
-    topk_mask = rank_df <= k
-    votes = topk_mask.sum(axis=1)
-
-    if min_votes is None:
-        min_votes = int(np.ceil(len(score_cols) / 2))
-
-    out = pd.DataFrame({"votes": votes, "mean_rank": mean_rank})
-    out = out[votes >= min_votes]
-    out = out.sort_values(["votes", "mean_rank"], ascending=[False, True]) # type: ignore
-
-    if show:
-        print(out.to_string())
-
-    reaction_selection = list(out.index)
-    return reaction_selection
+        return comparative_df
 

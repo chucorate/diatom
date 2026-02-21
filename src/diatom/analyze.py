@@ -1,3 +1,4 @@
+import logging
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
@@ -45,7 +46,7 @@ def qual_translate(fmin: np.ndarray, fmax: np.ndarray, eps: float = 1e-6) -> np.
     fmax : np.ndarray
         Array of maximum flux values from FVA.
 
-    delta : float, default=1e-4
+    eps : float, default=1e-6
         Numerical tolerance used to determine equality to zero.
 
     Returns
@@ -113,7 +114,7 @@ class DiatomAnalyze():
     fva_results : np.ndarray, shape (n_points, n_reactions, 2)
         FVA results over analyzed grid points.
   
-    qual_vector_df : pd.DataFrame
+    qualitative_matrix : pd.DataFrame
         DataFrame containing qualitative flux categories for each reaction and grid point.
 
     category_dict : dict[float, str]
@@ -129,15 +130,15 @@ class DiatomAnalyze():
         self.fva_reactions: list[str] = []      
         self.fva_results: np.ndarray # shape: (n_points, n_reactions, 2)
 
-        self.qual_vector: pd.DataFrame   
+        self.qualitative_matrix: pd.DataFrame   
         self.category_dict: dict[float, str] = CATEGORY_DICT
-        self._empty_qual_vector: list[float] | None = None
+        self._empty_qualitative_matrix: list[float] | None = None
         self._empty_fva_result: np.ndarray | None = None
 
         self.use_pfba: bool
         self.pfba_fraction: float
 
-        self.qFCA: pd.DataFrame = pd.DataFrame()
+        self.qFCA: pd.DataFrame
 
 
     def qualitative_analysis(
@@ -166,12 +167,12 @@ class DiatomAnalyze():
 
         Side Effects
         ------------
-        - Updates `self.qual_vector_df` with qualitative reaction categories for each analyzed grid point.
+        - Updates `self.qualitative_matrix` with qualitative reaction categories for each analyzed grid point.
         - Updates `self.fva_results` with FVA min/max values per reaction.
         - Updates `self.diatom.grid.analyzed_points` to set the subset of grid points used in the analysis.
         """
         self.diatom._require(grid_points=True)
-        print("Running qualitative fva over grid feasible points...")
+        logging.info("Running qualitative fva over grid feasible points...")
 
         points = self.diatom.grid.points               
         feasible_points = self.diatom.grid.feasible_points
@@ -181,20 +182,27 @@ class DiatomAnalyze():
         analyzed_points = filtered & feasible_points
         self.diatom.grid.analyzed_points = analyzed_points
 
-        # perform analysis
         points = points[analyzed_points, :]    
         df_index = np.where(analyzed_points)[0]
 
-        fva_tuples = self._calculate_qual_vectors(points, only_load = only_load, eps=eps)
+        # check for reactions selected for FVA and clustering
+        if not self.fva_reactions:
+            logging.warning("No reactions previously selected for FVA and clustering!\nSetting reactions for analysis...\n")
+            self.diatom._set_non_blocked_reactions()  
+            fva_reactions = list(self.diatom.non_blocked)  
+            fva_reactions.sort()
+            self.fva_reactions = fva_reactions
+
+        fva_tuples = self._calculate_qual_vectors(points, only_load=only_load, eps=eps)
         qual_vector_list, fva_results = map(list, zip(*fva_tuples))    
 
-        self.qual_vector = pd.DataFrame(np.array(qual_vector_list), columns=self.fva_reactions, index=df_index)
+        self.qualitative_matrix = pd.DataFrame(np.array(qual_vector_list), columns=self.fva_reactions, index=df_index)
         #self.diatom.io.save_qual_df()    
         fva_results = np.dstack(fva_results)
         fva_results = np.rollaxis(fva_results, -1)
         self.fva_results = fva_results
 
-        print("Done!\n")         
+        logging.info("Done!\n")         
 
 
     def _calculate_qual_vectors(self, grid_points: np.ndarray, only_load: bool, eps: float) -> list[tuple]:
@@ -203,17 +211,7 @@ class DiatomAnalyze():
         Iterates over grid points and calculates qualitative FVA vectors using. Each element in the returned 
         list is a tuple `(qual_vector, fva_result)` for a point.
         """
-        # Check for reactions selected for FVA and clustering
-        if not self.fva_reactions:
-            print("No reactions previously selected for FVA and clustering!\nSetting reactions for analysis...\n")
-            
-            self.diatom._set_non_blocked_reactions()  
-            fva_reactions = list(self.diatom.non_blocked)  
-            fva_reactions.sort()
-
-            self.fva_reactions = fva_reactions    
-
-        print("Analyzing point feasibility....")
+        logging.info("Analyzing point feasibility....")
         n_points = grid_points.shape[0]
         if only_load:
             fva_tuples = []
@@ -240,12 +238,12 @@ class DiatomAnalyze():
             return (qualitative_vector, loaded)
 
         # placeholder
-        if self._empty_qual_vector is None or self._empty_fva_result is None:
+        if self._empty_qualitative_matrix is None or self._empty_fva_result is None:
             n_rxns = len(self.fva_reactions)
-            self._empty_qual_vector = [np.nan] * n_rxns
+            self._empty_qualitative_matrix = [np.nan] * n_rxns
             self._empty_fva_result = np.full((n_rxns, 2), np.nan)
 
-        return (self._empty_qual_vector, self._empty_fva_result)
+        return (self._empty_qualitative_matrix, self._empty_fva_result)
 
 
     def _compute_qual_from_fva(self, fva_results: np.ndarray, eps: float) -> list:
@@ -348,7 +346,7 @@ class DiatomAnalyze():
         reaction_id_0 = reaction_ids[0]
         reaction_id_1 = reaction_ids[1]
 
-        print('Quantitative Flux Coupling analysis \n Initializing grid...')
+        logging.info('Quantitative Flux Coupling analysis \n Initializing grid...')
 
         analyze_points = []
         # Match points defined by the user in grid_x, grid_y to specific points on the grid
@@ -358,7 +356,7 @@ class DiatomAnalyze():
                 distances = np.linalg.norm(feasible_points-search_point, axis=1)
                 min_index = np.argmin(distances)
                 analyze_points.append(min_index)
-                #print(f"The closest point to {search_point} is {feasible_points[min_index]}, at a distance of {distances[min_index]}")
+                logging.debug(f"The closest point to {search_point} is {feasible_points[min_index]}, at a distance of {distances[min_index]}")
 
         qFCA_data = []
 

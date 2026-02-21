@@ -48,28 +48,18 @@ class DiatomGrid():
     points_per_axis : tuple[int, int]
         Number of grid points generated along the x and y axes.
 
-    delta : float
-        Relative grid spacing used to generate the sampling grid, expressed
-        as a fraction of the polytope bounding box size.
-
-    Notes
-    -----
-    The grid is constructed in normalized polytope coordinates using a
-    relative spacing (`delta`). Boundary accuracy is improved by explicitly
-    sampling line–boundary intersections and exact polytope vertices.
-
-    Feasibility checks rely on Shapely prepared geometries and use
-    `covers_xy` when available for performance.
+    n_partitions : int
+        Number of partitions defining the spacing used to generate the sampling grid.
     """
     def __init__(self, diatom: "Diatom"):
         self.diatom = diatom
-        self.points: NDArray[np.floating] = np.array([]) # shape: (numPoints**2, 2)
-        self.feasible_points: NDArray[np.bool] = np.array([])
-        self.analyzed_points: NDArray[np.bool] = np.array([])
+        self.n_partitions: int
+        self.points: NDArray[np.floating] # shape: ((n_partitions+1)**2, 2)
+        self.feasible_points: NDArray[np.bool] 
+        self.analyzed_points: NDArray[np.bool] 
         self.grid_dimensions: NDArray[np.floating] = np.array([0,0])
         self.points_per_axis: tuple[int, int] = (0,0)
-        self.grid_delta: float = 0.0
-
+        
 
     @staticmethod
     def _iter_geoms(g: BaseGeometry):
@@ -106,10 +96,6 @@ class DiatomGrid():
 
         Parameters
         ----------
-        delta : float
-            Grid spacing used to generate the regular sampling grid. Smaller
-            values lead to denser sampling at higher computational cost.
-
         eps : float, default=1e-8
             Small buffer applied to the polytope geometry before feasibility checks. 
             This improves numerical robustness for points lying close to the boundary.
@@ -153,12 +139,6 @@ class DiatomGrid():
     def _build_grid(self) -> tuple[NDArray[np.floating], BaseGeometry]:
         """Creates a 2D grid across the polytope bounding box.
         
-        Parameters
-        ----------
-        delta: float
-            Grid spacing used to generate the regular sampling grid. Smaller
-            values lead to denser sampling at higher computational cost.
-
         Returns
         -------
         tuple
@@ -172,7 +152,7 @@ class DiatomGrid():
             Geometry containing vertical and horizontal lines that define the grid sampling space.
         
         """
-        delta = self.grid_delta
+        n_points = self.n_partitions+1
         poly = self.diatom.projection.polytope
 
         minx, miny, maxx, maxy = poly.bounds
@@ -180,11 +160,8 @@ class DiatomGrid():
         interval_y = maxy - miny
         self.grid_dimensions = np.array([interval_x, interval_y])
 
-        dx, dy = delta * interval_x, delta * interval_y
-        
-
-        xs = np.arange(minx, maxx + dx, dx)
-        ys = np.arange(miny, maxy + dy, dy)
+        xs = np.linspace(minx, maxx, n_points)
+        ys = np.linspace(miny, maxy, n_points)
 
         self.points_per_axis = (len(xs), len(ys))
 

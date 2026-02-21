@@ -28,14 +28,9 @@ class DiatomPlot():
     def polytope_shape(self, **kwargs):
         """Plot the projected feasible polytope together with the sampling grid.
 
-        Parameters
-        ----------
-        delta : float
-            Grid spacing used to build the auxiliary grid lines.
-
         Note
         ----
-        Intended mainly for debugging geometry and projection consistency.
+        Intended mainly for debugging the geometry of the projection.
         """
         self.diatom._require(set_instance=True, polytope=True)
         poly = self.diatom.projection.polytope

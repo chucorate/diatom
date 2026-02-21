@@ -1,3 +1,4 @@
+import logging
 from typing import Callable
 from functools import wraps
 
@@ -191,7 +192,7 @@ def error_handler(function: Callable[..., float]) -> Callable[..., float]:
             return function(*args, **kwargs)
         except ValueError as e:
             if "Reaction" in str(e) and "not found in fva_reactions" in str(e):
-                print(f"{e}: defaulting value to {-np.inf}")
+                logging.warning(f"{e}: defaulting value to {-np.inf}")
                 return -np.inf
             raise
     return wrapper
@@ -223,7 +224,7 @@ def _aggregate_reactions(
             values.append(float(np.abs(np.median(mid))))
         except ValueError as e:
             if "not found in fva_reactions" in str(e):
-                print(f"{e}: defaulting value to {0.0}")
+                logging.warning(f"{e}: defaulting value to {0.0}")
                 values.append(0.0)
             else:
                 raise

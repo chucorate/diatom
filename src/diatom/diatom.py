@@ -1,4 +1,5 @@
-from typing import cast, Iterable, Optional, Callable
+import logging
+from typing import cast, Iterable
 from optlang import Constraint
 
 import numpy as np
@@ -12,7 +13,7 @@ from .polytope import Projection
 from .analyze import DiatomAnalyze
 from .grid import DiatomGrid
 from .plot import DiatomPlot
-from src.model_io import ModelIO, load_model, file_hash
+from src.model_io import ModelIO, load_model, file_hash, canonicalize
 from src.model_clustering import ModelClustering
 
 
@@ -54,14 +55,13 @@ class Diatom():
     io : ModelIO
         Input/output utilities for saving and loading results.
     """
-    def __init__(self, model_id: str, model_name: str, solver: str = "gurobi"):
+    def __init__(self, model_id: str, model_name: str, solver: str = "gurobi", **kwargs):
         self.model_id = model_id
         self.model_name = model_name
                                  
-        self.model: Model = load_model(model_id, name = model_name, solver=solver)
+        self.model: Model = load_model(model_id, name=model_name, solver=solver, **kwargs)
         self.objectives: dict[str, float] = {}
         self.non_blocked: set[str] 
-        self.constraints: dict[str, tuple[Numerical, Numerical]] 
 
         self.projection = Projection(self)
         self.grid = DiatomGrid(self)
@@ -105,7 +105,7 @@ class Diatom():
 
         model.objective = {model.reactions.get_by_id(r): coeff for r, coeff in self.objectives.items()}  
 
-        print(model.objective, "\n") 
+        logging.info(f"{model.objective}\n") 
 
 
     def add_metabolite(self, metabolite_id: str, **kwargs):
@@ -323,7 +323,7 @@ class Diatom():
         polytope: bool = False, 
         grid_points: bool = False, 
         clusters: bool = False, 
-        qual_vector: bool = False, 
+        qualitative_matrix: bool = False, 
         qfca: bool = False,
     ) -> None:
         """Internal consistency check for required analysis stages.
@@ -339,7 +339,7 @@ class Diatom():
         if grid_points and self.grid.points.size == 0:
             raise RuntimeError(f"Grid points not yet computed. Run {self.grid.sample_polytope.__name__} first!")
         
-        if qual_vector and self.analyze.qual_vector.empty:
+        if qualitative_matrix and self.analyze.qualitative_matrix.empty:
             raise RuntimeError(f"Qualitative FVA values not yet computed. Run {self.analyze.qualitative_analysis.__name__} first!")
 
         if clusters and self.clustering.grid_clusters.size == 0:
@@ -351,9 +351,9 @@ class Diatom():
 
     def set_sampling_instance(
         self,
+        experiment_tag: str,
         reaction_tuple: tuple[str, str],
-        grid_delta: float = 0.02,
-        n_clusters: int = 10,
+        n_partitions: int = 50,
         use_pfba: bool = False,
         fraction_of_optimum: float = 1.0,
         save_files: bool = False,
@@ -371,34 +371,22 @@ class Diatom():
             - reaction bounds (constraints)
             - reaction tuple defining the 2D projection
 
-        Numerical parameters such as `grid_delta`, `n_sampling_angles`, and
-        `n_clusters` affect only how the feasible region is explored and analyzed,
-        not the biological identity of the experiment.
+        Numerical parameters `n_partitions` and `n_clusters` affect only how the feasible 
+        region is explored and analyzed, not the biological elements of the experiment.
 
         Parameters
         ----------
-        constraints : dict[str, tuple[Numerical, Numerical]]
-            Mapping from reaction IDs to (lower_bound, upper_bound).
-            These bounds redefine the feasible region of the model and therefore
-            determine the biological identity of the experiment.
+        experiment_tag : str
+            Tag used to identify the experiment, alongside the experiment's sampling hash.
 
         reaction_tuple : tuple[str, str]
             Pair of reaction IDs defining the 2D projection space.
             The first reaction is treated as the x-axis and the second as the y-axis.
             The second reaction is also set as the optimization objective.
 
-        n_sampling_angles : int
-            Number of angular directions used to approximate the 2D projected
-            polytope boundary. Higher values yield a more accurate projection
-            at increased computational cost.
-
-        grid_delta : float
-            Spacing between grid points used to discretize the projected polytope.
-            Controls sampling resolution. Smaller values increase resolution and
-            computational cost but do not change the feasible region.
-
-        n_clusters : int
-            Initial number of clusters used for grid-based clustering analysis.
+        n_partitios : int
+            Number of partitions used to discretize each axis of the projected polytope.
+            Higher values increase resolution and computational cost but do not change the feasible region.
 
         save_files : bool
             If True, all computed results (FVA results, clustering outputs, 
@@ -433,26 +421,27 @@ class Diatom():
             If reaction IDs do not exist in the model or parameters are invalid.
         """
         # security assertions
+        assert isinstance(experiment_tag, str)
+
         assert isinstance(reaction_tuple, tuple)
         for reaction_id in reaction_tuple:
             assert reaction_id in self.model.reactions
 
         constraints = dict(sorted(self.extra_bounds.items()))
         constraints_list = {k: list(v) for k, v in constraints.items()}
-        n_constraints = len(constraints_list) 
         self.extra_bounds = constraints
 
-        assert isinstance(grid_delta, float) and grid_delta > 0 and grid_delta <= 1
-        assert isinstance(n_clusters, int) and n_clusters > 0
+        assert isinstance(n_partitions, int) and n_partitions > 0
         assert isinstance(save_files, bool)
         assert isinstance(load_files, bool)
 
         # set parameters
+        self.io.experiment_tag = experiment_tag
+
         self._set_objective_functions({reaction_tuple[1]: 1.0})
 
         self.analyze.analyzed_reactions = reaction_tuple
-        self.grid.grid_delta = grid_delta
-        self.clustering.initial_n_clusters = n_clusters
+        self.grid.n_partitions = n_partitions
 
         self.io.save_files = save_files
         self.io.load_files = load_files
@@ -464,17 +453,17 @@ class Diatom():
         metadata = {
             "model_filename": self.model_id,
             "model_hash": file_hash(self.model_id),
-            "reaction_tuple": list(reaction_tuple), # to ensure json compatibility
-            "bound_constraints": constraints_list, # to ensure json compatibility
-            "n_bound_constraints": n_constraints,
+            "reaction_tuple": reaction_tuple,
             "metabolites": self.extra_metabolites,
             "reactions": self.extra_reactions,
+            "bound_constraints": constraints_list, 
             "flux_constraints": self.extra_flux_constraints,
             "use_pfba": use_pfba,
             "pfba_fraction_of_optimum": fraction_of_optimum,
         }
-        self.metadata = metadata
-
+        self.metadata = canonicalize(metadata)
+        logging.debug(self.metadata)
+        
         message = f"Generated hash '{self.io.sampling_hash}' for current sampling metadata:\n"
         
         for key, value in metadata.items():
@@ -494,9 +483,9 @@ class Diatom():
         )
         
         message += f"\n{save_message}\n\n{load_message}"
-        print(message)
+        logging.info(message)
 
-        if save_files:
+        if save_files or load_files:
             self.io.write_metadata()
         self._is_sampling_instance_set = True
         

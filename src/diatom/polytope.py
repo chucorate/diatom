@@ -1,3 +1,4 @@
+import logging
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
@@ -140,7 +141,7 @@ class Projection():
             else:
                 v = cast(Vertex, v.next)
 
-        print(f"Number of iterations: {n_iterations}")
+        logging.debug(f"Number of iterations: {n_iterations}")
     
     
     def _ordered_vertices(self) -> list[Vertex]:
