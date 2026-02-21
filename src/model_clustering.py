@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pandas as pd
@@ -10,7 +10,6 @@ from src.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST
 from src.feature_selection import PER_REACTION_SCORE_FUNCTIONS, GLOBAL_SCORE_FUNCTIONS
 
 if TYPE_CHECKING:
-    from ecosystem.base import BaseEcosystem
     from diatom.diatom import Diatom
 
 
@@ -41,9 +40,10 @@ class ModelClustering():
     def __init__(self, modelclass: "Diatom"):
         self.modelclass = modelclass
         self.initial_n_clusters: int = 0
-        self.grid_n_clusters: int = 0
-        self.grid_clusters: np.ndarray = np.array([])
-        self.linkage_matrix: np.ndarray = np.array([])
+        self.grid_n_clusters: int 
+        self.grid_clusters: np.ndarray 
+        self.linkage_matrix: np.ndarray 
+        self.representatives: pd.DataFrame
 
 
     @property
@@ -119,7 +119,7 @@ class ModelClustering():
         loaded_clusters = self.modelclass.io.load_clusters()
         if isinstance(loaded_clusters, tuple):
             self.grid_n_clusters, self.grid_clusters = loaded_clusters
-            return 
+            #return 
 
         qualitative_vector = self.one_hot_encode_reactions(changing)
         
@@ -218,7 +218,7 @@ class ModelClustering():
             for cluster_df in cluster_dfs
         ]
         
-        representatives = pd.concat(representatives_list, axis=1).astype('float')
+        representatives = cast(pd.DataFrame, pd.concat(representatives_list, axis=1).astype('float'))
         representatives.columns = [f'c{cluster_id}' for cluster_id in cluster_ids]
 
         analyze = self.modelclass.analyze
@@ -231,8 +231,9 @@ class ModelClustering():
             representatives = representatives.replace(analyze.category_dict)
 
         reaction_len = len(selected_reactions) if selected_reactions is not None else -1
-        if selected_reactions is not None:
-            representatives = representatives.loc[selected_reactions]
+        representatives = (representatives.loc[selected_reactions] 
+                           if selected_reactions else 
+                           representatives.loc[self.modelclass.analyze.fva_reactions])
        
         self.modelclass.io.save_cluster_df(
             representatives, 
@@ -241,7 +242,39 @@ class ModelClustering():
             index=True, 
             overwrite=overwrite,
         )
+        self.representatives = representatives
         return representatives
+    
+
+    def n_clusters_score(self, threshold: float, selected_reactions: list[str] | None = None) -> tuple[float, pd.Series]:
+        self.modelclass._require(clusters=True, qual_vector=True)
+
+        reaction_list = selected_reactions if selected_reactions is not None else self.modelclass.analyze.fva_reactions
+
+        n_points = self.qual_vector.shape[0]
+        qual_states = self.qual_vector[reaction_list].replace(self.modelclass.analyze.category_dict)
+        
+        n_clusters = self.grid_n_clusters
+        cluster_masks = {cluster_id: self.grid_clusters == cluster_id for cluster_id in range(1, n_clusters+1)}
+
+    
+        scores_dict: dict[str, float] = {}
+        for reaction_id in reaction_list:
+            reaction_score = 0
+            representatives = self.representatives.loc[reaction_id]
+
+            for cluster_id, cluster_mask in cluster_masks.items():
+                representative_state = str(representatives[f"c{cluster_id}"])
+                actual_states = qual_states.loc[cluster_mask, reaction_id]
+
+                reaction_score += float(np.sum(actual_states == representative_state))
+            
+            scores_dict[reaction_id] = reaction_score / n_points
+
+        scores = pd.Series(scores_dict)
+        success_ratio = (scores >= threshold).mean()
+
+        return success_ratio, scores
 
 
     @staticmethod
@@ -350,7 +383,6 @@ class ModelClustering():
         metric_names = [metric.__name__ for metric in REACTION_METRIC_LIST]
 
         rows: list[dict[str, Any]] = []
-        not_available: int = 0
 
         for reaction_id in reaction_list:
             reaction_index = fva_reactions.index(reaction_id)
@@ -412,7 +444,6 @@ class ModelClustering():
                 val = score_func(
                     reaction_states=self.qual_vector[rid].values,
                     clusters=self.grid_clusters,
-                    linkage_matrix=self.linkage_matrix,
                     fva_result = (fva_results[:, reaction_index, :])
                 )
                 scores.append(val)
@@ -429,7 +460,6 @@ class ModelClustering():
     
 
 # ======================================================= CLUSTER FUNCTIONS =======================================================
-
 
 def _get_hierarchical_clusters(
     dvector: np.ndarray, 

@@ -85,7 +85,7 @@ class DiatomPlot():
         self, 
         show_boundary: bool = False, 
         show_points: bool = True,
-        s: float = 12.0, 
+        s: float = 15.0, 
         **kwargs,
     ) -> None:
         """Plot sampled grid points inside the feasible polytope, colored by cluster.
@@ -96,7 +96,7 @@ class DiatomPlot():
             Whether to draw the polytope boundary.
         show_points : bool, default=True
             Whether to draw sampled grid points.
-        s : float, default=12.0
+        s : float, default=15.0
             Marker size for sampled points.
         alpha : float, default=1.0
             Marker transparency.
@@ -113,7 +113,7 @@ class DiatomPlot():
 
         points = points[analyzed]
 
-        fig, ax = plt.subplots(figsize=(7, 7))
+        fig, ax = plt.subplots(figsize=(7, 6))
 
         # --- Polígono ---
         if show_boundary:
@@ -202,6 +202,23 @@ class DiatomPlot():
         ax.set_xlabel('reactions')
 
         return category_percents 
+
+
+    def dendrogram(self):
+        from scipy.cluster.hierarchy import dendrogram as dendro
+        self.diatom._require(clusters=True)
+
+        plt.figure(figsize=(10, 5))
+        plt.title('Hierarchical Clustering Dendrogram')
+        dendro(
+            self.diatom.clustering.linkage_matrix,
+            #truncate_mode='lastp',
+            #p=8,
+            show_leaf_counts=True,
+            leaf_rotation=90,
+            leaf_font_size=9,
+        )
+        plt.show() 
 
 
     def qFCA_results(self, col_wrap: int = 4) -> None:

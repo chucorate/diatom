@@ -30,7 +30,7 @@ flux variability states derived from FVA minimum/maximum values.
 """
 
 
-def qual_translate(fmin: np.ndarray, fmax: np.ndarray, eps: float = 1e-9) -> np.ndarray:
+def qual_translate(fmin: np.ndarray, fmax: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     """Translate FVA min/max values into qualitative flux states.
 
     Compares minimum and maximum flux values obtained from FVA and assigns
@@ -145,7 +145,7 @@ class DiatomAnalyze():
         x_limits: tuple[float, float] = (-np.inf, np.inf),  
         y_limits: tuple[float, float] = (-np.inf, np.inf), 
         only_load: bool = False,  
-        eps: float = 1e-9,
+        eps: float = 1e-6,
     ) -> None:
         """Run qualitative FVA over selected grid points.
 
