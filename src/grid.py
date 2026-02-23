@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .diatom import Diatom
 
 
-class DiatomGrid():
+class Grid():
     """Grid-based sampler and feasibility evaluator over an existing 2D polytope.
 
     This class manages the construction of a regular 2D grid over the
@@ -51,8 +51,8 @@ class DiatomGrid():
     n_partitions : int
         Number of partitions defining the spacing used to generate the sampling grid.
     """
-    def __init__(self, diatom: "Diatom"):
-        self.diatom = diatom
+    def __init__(self, parent_class: "Diatom"):
+        self.parent_class = parent_class
         self.n_partitions: int
         self.points: NDArray[np.floating] # shape: ((n_partitions+1)**2, 2)
         self.feasible_points: NDArray[np.bool] 
@@ -74,7 +74,7 @@ class DiatomGrid():
 
     def _intersection_points(self, lines: BaseGeometry) -> NDArray[np.floating]:
         """Gets all the points that intersect the polytope and the grid sampling lines."""
-        poly = self.diatom.projection.polytope
+        poly = self.parent_class.projection.polytope
         inter = intersection_all([lines, poly.boundary])
 
         points = [(g.x, g.y) for g in self._iter_geoms(inter) if isinstance(g, Point)]
@@ -108,9 +108,9 @@ class DiatomGrid():
         feasible_points : np.ndarray, shape (n_points,)
             Boolean mask indicating whether each sampled point lies within the boundaries of the polytope.
         """
-        self.diatom._require(set_instance=True, polytope=True)
+        self.parent_class._require(set_instance=True, polytope=True)
 
-        poly = self.diatom.projection.polytope
+        poly = self.parent_class.projection.polytope
         prepared_poly = prep(poly.buffer(eps))
 
         covers_xy = getattr(prepared_poly, "covers_xy", None)
@@ -153,7 +153,7 @@ class DiatomGrid():
         
         """
         n_points = self.n_partitions+1
-        poly = self.diatom.projection.polytope
+        poly = self.parent_class.projection.polytope
 
         minx, miny, maxx, maxy = poly.bounds
         interval_x = maxx - minx

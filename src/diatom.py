@@ -10,11 +10,11 @@ from cobra.util.solver import linear_reaction_coefficients
 from cobra.flux_analysis.parsimonious import add_pfba
 
 from .polytope import Projection
-from .analyze import DiatomAnalyze
-from .grid import DiatomGrid
-from .plot import DiatomPlot
-from src.model_io import ModelIO, load_model, file_hash, canonicalize
-from src.model_clustering import ModelClustering
+from .analyze import Analyze
+from .grid import Grid
+from .plot import Plot
+from .io import IO, load_model, file_hash, canonicalize
+from .clustering import Clustering
 
 
 Numerical = int | float
@@ -64,11 +64,11 @@ class Diatom():
         self.non_blocked: set[str] 
 
         self.projection = Projection(self)
-        self.grid = DiatomGrid(self)
-        self.analyze = DiatomAnalyze(self)
-        self.plot = DiatomPlot(self)
-        self.clustering = ModelClustering(self)
-        self.io = ModelIO(self, model_name)
+        self.grid = Grid(self)
+        self.analyze = Analyze(self)
+        self.plot = Plot(self)
+        self.clustering = Clustering(self)
+        self.io = IO(self, model_name)
 
         self._is_sampling_instance_set: bool = False
         self.metadata: dict 

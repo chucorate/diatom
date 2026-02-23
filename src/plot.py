@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .diatom import Diatom
 
 
-class DiatomPlot():
+class Plot():
     """Utility class for visualizing geometric, sampling, clustering and qualitative
     analysis results associated with a diatom analysis framework instance.
 

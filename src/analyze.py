@@ -81,7 +81,7 @@ def qual_translate(fmin: np.ndarray, fmax: np.ndarray, eps: float = 1e-12) -> np
     return np.select(conditions, choices, default=5.0)
 
 
-class DiatomAnalyze():
+class Analyze():
     """Analysis class for flux-based analyses.
 
     This class encapsulates all analysis steps that require interaction with
@@ -123,8 +123,8 @@ class DiatomAnalyze():
     qFCA : pd.DataFrame
         Results of quantitative Flux Coupling Analysis.
     """
-    def __init__(self, diatom: "Diatom"):
-        self.diatom = diatom
+    def __init__(self, parent_class: "Diatom"):
+        self.parent_class = parent_class
 
         self.analyzed_reactions: tuple[str, str] 
         self.fva_reactions: list[str] = []      
@@ -171,16 +171,16 @@ class DiatomAnalyze():
         - Updates `self.fva_results` with FVA min/max values per reaction.
         - Updates `self.diatom.grid.analyzed_points` to set the subset of grid points used in the analysis.
         """
-        self.diatom._require(grid_points=True)
+        self.parent_class._require(grid_points=True)
         logging.info("Running qualitative fva over grid feasible points...")
 
-        points = self.diatom.grid.points               
-        feasible_points = self.diatom.grid.feasible_points
+        points = self.parent_class.grid.points               
+        feasible_points = self.parent_class.grid.feasible_points
 
         # select points for analysis
         filtered = (points[:, 0] > x_limits[0]) & (points[:, 0] < x_limits[1]) & (points[:, 1] > y_limits[0]) & (points[:, 1] < y_limits[1])
         analyzed_points = filtered & feasible_points
-        self.diatom.grid.analyzed_points = analyzed_points
+        self.parent_class.grid.analyzed_points = analyzed_points
 
         points = points[analyzed_points, :]    
         df_index = np.where(analyzed_points)[0]
@@ -188,8 +188,8 @@ class DiatomAnalyze():
         # check for reactions selected for FVA and clustering
         if not self.fva_reactions:
             logging.warning("No reactions previously selected for FVA and clustering!\nSetting reactions for analysis...\n")
-            self.diatom._set_non_blocked_reactions()  
-            fva_reactions = list(self.diatom.non_blocked)  
+            self.parent_class._set_non_blocked_reactions()  
+            fva_reactions = list(self.parent_class.non_blocked)  
             fva_reactions.sort()
             self.fva_reactions = fva_reactions
 
@@ -231,7 +231,7 @@ class DiatomAnalyze():
         Attempts to retrieve stored FVA results for the given grid point. 
         If no stored result is found, a placeholder result filled with NaNs is returned.
         """
-        loaded = self.diatom.io.load_point(grid_point, "qual_fva")
+        loaded = self.parent_class.io.load_point(grid_point, "qual_fva")
 
         if isinstance(loaded, np.ndarray):
             qualitative_vector = self._compute_qual_from_fva(loaded, eps)
@@ -282,7 +282,7 @@ class DiatomAnalyze():
         `with community_model:` context manager. This guarantees that all changes are reverted after the 
         analysis is completed.
         """
-        loaded_point = self.diatom.io.load_point(grid_point, "qual_fva")
+        loaded_point = self.parent_class.io.load_point(grid_point, "qual_fva")
         if isinstance(loaded_point, np.ndarray):
             qualitative_vector = self._compute_qual_from_fva(loaded_point, eps=eps)
             return (qualitative_vector, loaded_point)
@@ -290,18 +290,18 @@ class DiatomAnalyze():
         if not self.fva_reactions:
             raise RuntimeError('No reactions selected for fva and clustering!')
         
-        with self.diatom.model as model:
+        with self.parent_class.model as model:
             # fix analyzed reactions to grid point value:
-            self.diatom.fix_growth_rates(model, grid_point)
+            self.parent_class.fix_growth_rates(model, grid_point)
 
             if self.use_pfba:
-                self.diatom.apply_pfba_constraint(model, fraction_of_optimum=self.pfba_fraction)
+                self.parent_class.apply_pfba_constraint(model, fraction_of_optimum=self.pfba_fraction)
                 
             # analyze feasible point
             rxn_fva = flux_variability_analysis(model, reaction_list=self.fva_reactions) # type: ignore              
             rxn_fva = rxn_fva.loc[self.fva_reactions, :] # just to make sure reactions are in the same order as fva_reactions
             fva_results = rxn_fva.values
-            self.diatom.io.save_fva_result(grid_point, fva_results)
+            self.parent_class.io.save_fva_result(grid_point, fva_results)
 
         qualitative_vector = self._compute_qual_from_fva(fva_results, eps=eps)
 
@@ -340,9 +340,9 @@ class DiatomAnalyze():
             - grid point coordinates
         """
         assert len(reaction_ids) == 2
-        self.diatom._require(grid_points=True)
+        self.parent_class._require(grid_points=True)
 
-        feasible_points = self.diatom.grid.points[self.diatom.grid.feasible_points]
+        feasible_points = self.parent_class.grid.points[self.parent_class.grid.feasible_points]
         reaction_id_0 = reaction_ids[0]
         reaction_id_1 = reaction_ids[1]
 
@@ -362,9 +362,9 @@ class DiatomAnalyze():
 
         for point in analyze_points:
             grid_point = feasible_points[point]
-            with self.diatom.model as model:
+            with self.parent_class.model as model:
                 # update bounds nad objectives
-                self.diatom.fix_growth_rates(model, grid_point)
+                self.parent_class.fix_growth_rates(model, grid_point)
 
                 # define limit reactions based on theoretical max-min defined from model
                 fva_result = flux_variability_analysis(model, reaction_list = [reaction_id_0])
