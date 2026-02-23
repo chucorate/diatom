@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 import numpy as np
 import pandas as pd
@@ -7,7 +7,7 @@ from scipy.spatial import distance
 from scipy.cluster.hierarchy import fcluster
 from scipy.cluster import hierarchy
 
-from src.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST
+from src.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST, Floating, ratio_metric
 from src.feature_selection import PER_REACTION_SCORE_FUNCTIONS, GLOBAL_SCORE_FUNCTIONS
 
 if TYPE_CHECKING:
@@ -45,6 +45,11 @@ class ModelClustering():
         self.linkage_matrix: np.ndarray 
         self.representatives: pd.DataFrame
 
+        self.reaction_metrics: list[Callable] = REACTION_METRIC_LIST
+        self.global_metrics: list[Callable] = GLOBAL_METRIC_LIST
+        self.reaction_score_metrics: list[Callable] = PER_REACTION_SCORE_FUNCTIONS
+        self.global_score_metrics: list[Callable] = GLOBAL_SCORE_FUNCTIONS
+        
 
     @property
     def qualitative_matrix(self) -> pd.DataFrame:
@@ -323,31 +328,29 @@ class ModelClustering():
             Metric value for the given cluster.
         """
         self.modelclass._require(clusters=True)
-
+        
         grid_clusters = self.grid_clusters
         fva_reactions = self.modelclass.analyze.fva_reactions
         fva_results = self.modelclass.analyze.fva_results
 
-        metric_names = [metric.__name__ for metric in GLOBAL_METRIC_LIST]
+        metric_names = [metric.__name__ for metric in self.global_metrics]
 
         rows: list[dict[str, Any]] = []
         for cluster_index in range(1, self.grid_n_clusters+1):
             metric_results = [
                 metric(fva_reactions, fva_results, grid_clusters, cluster_index) 
-                for metric in GLOBAL_METRIC_LIST
+                for metric in self.global_metrics
             ]
 
             for metric_name, metric_value in zip(metric_names, metric_results):
-                rows.append({
-                    "cluster": cluster_index, "metric": metric_name, "value": metric_value
-                })
+                rows.append({"cluster": cluster_index, "metric": metric_name, "value": metric_value})
 
         df = pd.DataFrame(rows)
         self.modelclass.io.save_cluster_df(
             df, 
             "Global_metrics", 
             reaction_len=len(reaction_list), 
-            metric_list=GLOBAL_METRIC_LIST, 
+            metric_list=self.global_metrics, 
             overwrite=overwrite,
         )
         return df
@@ -386,7 +389,7 @@ class ModelClustering():
         fva_reactions = self.modelclass.analyze.fva_reactions
         fva_results = self.modelclass.analyze.fva_results
 
-        metric_names = [metric.__name__ for metric in REACTION_METRIC_LIST]
+        metric_names = [metric.__name__ for metric in self.reaction_metrics]
 
         rows: list[dict[str, Any]] = []
 
@@ -396,7 +399,7 @@ class ModelClustering():
 
             for cluster_index in range(1, self.grid_n_clusters+1):
                 filtered_results = reaction_fva_results[grid_clusters == cluster_index]
-                metric_results = [metric(filtered_results) for metric in REACTION_METRIC_LIST]
+                metric_results = [metric(filtered_results) for metric in self.reaction_metrics]
 
                 for metric_name, metric_value in zip(metric_names, metric_results):
                     rows.append({
@@ -411,7 +414,7 @@ class ModelClustering():
             df, 
             "Metrics_per_reaction", 
             reaction_len=len(reaction_list), 
-            metric_list=REACTION_METRIC_LIST, 
+            metric_list=self.reaction_metrics, 
             overwrite=overwrite,
         )
         return df
@@ -443,17 +446,18 @@ class ModelClustering():
         """
         self.modelclass._require(clusters=True, qualitative_matrix=True)
 
+        fva_reactions = self.modelclass.analyze.fva_reactions
+        fva_results = self.modelclass.analyze.fva_results
+
         scores_df = pd.DataFrame(index=self.qualitative_matrix.columns)
 
-        for score_func in GLOBAL_SCORE_FUNCTIONS:
+        for score_func in self.global_score_metrics:
             scores_df[score_func.__name__] = score_func(qualitative_matrix=self.qualitative_matrix, grid_clusters=self.grid_clusters)
 
-        for score_func in PER_REACTION_SCORE_FUNCTIONS:
+        for score_func in self.reaction_score_metrics:
             func_name = score_func.__name__
             scores = []
             for rid in self.qualitative_matrix.columns:
-                fva_reactions = self.modelclass.analyze.fva_reactions
-                fva_results = self.modelclass.analyze.fva_results
                 reaction_index = fva_reactions.index(rid)
                 val = score_func(
                     reaction_states=self.qualitative_matrix[rid].values,
@@ -467,7 +471,7 @@ class ModelClustering():
         if sort_score:
             scores_df = scores_df.sort_values(by=col_to_sort, ascending=False)
 
-        metric_names = [f.__name__ for f in GLOBAL_SCORE_FUNCTIONS] + [f.__name__ for f in PER_REACTION_SCORE_FUNCTIONS]
+        metric_names = [f.__name__ for f in self.global_score_metrics] + [f.__name__ for f in self.reaction_score_metrics]
         rank_df, feature_selection = self._consensus_feature_selection(scores_df, metric_names, **kwargs)
         logging.info(f"Number of reactions selected: {len(feature_selection)}\n")
 
@@ -535,3 +539,78 @@ class ModelClustering():
 
         return comparative_df
 
+
+    def set_ratio_metric(self,
+        metric_name: str,
+        numerator: str | list[str],
+        denominator: str | list[str],
+        num_func: Callable[[Floating, Floating], Floating] | None = None,
+        den_func: Callable[[Floating, Floating], Floating] | None = None,
+        add_to_metrics: bool = True,
+    ) -> None:
+        """
+        Defines and registers a custom ratio-based global metric.
+
+        For each reaction in the numerator and denominator sets, this metric:
+        1. Extracts the FVA min/max values restricted to the specified cluster.
+        2. Computes the midpoint of the feasible interval at each grid point.
+        3. Takes the median midpoint across points.
+        4. Computes the absolute value of that median.
+        5. Sums contributions across all reactions in the set.
+
+        The final metric is computed as a ratio between the aggregated numerator
+        and denominator values. Optional transformation functions can be applied
+        to the numerator and/or denominator before division.
+
+        Parameters
+        ----------
+        metric_name : str
+            Name assigned to the generated metric function. This name is used
+            for identification and reporting.
+        numerator : str or list[str]
+            Reaction ID or list of reaction IDs defining the numerator term.
+        denominator : str or list[str]
+            Reaction ID or list of reaction IDs defining the denominator term.
+        num_func : callable, optional
+            Transformation applied to the aggregated numerator value
+            (receives numerator and denominator aggregates as input).
+        den_func : callable, optional
+            Transformation applied to the aggregated denominator value
+            (receives numerator and denominator aggregates as input).
+        add_to_metrics : bool, default=True
+            If True, the generated metric is appended to `self.global_metrics`.
+
+        Attributes Set
+        -------
+        The method registers the metric in `self.global_metrics` if configured to do so.
+        """
+        def metric(
+            fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
+        ) -> float:
+            ratio = ratio_metric(
+                fva_reactions, 
+                fva_results, 
+                grid_clusters, 
+                cluster_index, 
+                numerator,
+                denominator,
+                num_func=num_func,
+                den_func=den_func,
+            )
+            return ratio
+
+        metric.__name__ = metric_name
+
+        if add_to_metrics:
+            self.global_metrics.append(metric)
+
+    
+    def show_all_metrics(self) -> None:
+        all_metrics_dict = {
+            "Reaction Metrics": self.reaction_metrics, 
+            "Global Metrics": self.global_metrics, 
+            "Feature Selection Metrics": self.reaction_score_metrics + self.global_score_metrics, 
+        }
+
+        for list_name, metric_list in all_metrics_dict.items():
+            print(f"{list_name}:\n{[metric.__name__ for metric in metric_list]}\n")

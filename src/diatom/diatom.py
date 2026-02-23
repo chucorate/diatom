@@ -22,7 +22,7 @@ Numerical = int | float
 
 class Diatom():
     """
-    Class for handling a diatom metabolic model and its analysis pipeline.
+    Class for handling metabolic models and their analysis pipelines.
 
     This class centralizes access to the COBRA model and orchestrates grid sampling,
     qualitative and quantitative analyses, clustering, plotting, and I/O utilities.

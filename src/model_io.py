@@ -352,7 +352,7 @@ class ModelIO():
         type: Literal["Qualitative_profiles", "Metrics_per_reaction", "Global_metrics"], 
         index: bool = False,
         reaction_len: int = -1,
-        metric_list: list[str] | None = None,
+        metric_list: list | None = None,
         overwrite: bool = False,
     ) -> None: 
         if not self.save_files:
@@ -374,7 +374,7 @@ class ModelIO():
         if not self.save_files:
             return
         
-        path = RESULTS_DIRECTORY / self.model_name / "supplementary" / f"{self.analyzed_tuple_string}.xlsx"
+        path = self._dataframe_directory / f"{self.experiment_tag}_{self.numeric_identifier}.xlsx"
         path.parent.mkdir(parents=True, exist_ok=True)
 
         with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
@@ -387,9 +387,12 @@ class ModelIO():
 
     def save_plot_path(self, extra_label: str | None = None) -> Path | None:
         if not self.save_files:
+            logging.info(f"Plot not saved.")
             return
         
         plot_label = f"_{extra_label}" if extra_label is not None else ""
         path = self._plots_directory / f"Plot{plot_label}_{self.numeric_identifier}.png"
+
+        logging.info(f"Plot saved at path {path}.")
         return path
 

@@ -1,3 +1,4 @@
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -139,11 +140,7 @@ class DiatomPlot():
         ax.grid(True)
 
         plt.tight_layout()
-        #ax.set_aspect("auto")
-        #ax.set_xlim(points[:, 0].min(), points[:, 0].max())
-        #ax.set_ylim(points[:, 1].min(), points[:, 1].max())
-        #fig.subplots_adjust(right=0.88)
-
+        
         path = self.diatom.io.save_plot_path()
         if path is not None:
             plt.savefig(path)

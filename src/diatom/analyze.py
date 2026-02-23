@@ -31,7 +31,7 @@ flux variability states derived from FVA minimum/maximum values.
 """
 
 
-def qual_translate(fmin: np.ndarray, fmax: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+def qual_translate(fmin: np.ndarray, fmax: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """Translate FVA min/max values into qualitative flux states.
 
     Compares minimum and maximum flux values obtained from FVA and assigns
@@ -82,7 +82,7 @@ def qual_translate(fmin: np.ndarray, fmax: np.ndarray, eps: float = 1e-6) -> np.
 
 
 class DiatomAnalyze():
-    """Analysis class for polytope construction and flux-based analyses.
+    """Analysis class for flux-based analyses.
 
     This class encapsulates all analysis steps that require interaction with
     the metabolic model, including:

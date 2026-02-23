@@ -88,7 +88,7 @@ def mean_abs_flux(minmax: np.ndarray) -> float:
     return float(np.mean(cap))
 
 
-REACTION_METRIC_LIST = [
+REACTION_METRIC_LIST: list[Callable] = [
     minimum,
     maximum,
     mean_range,
@@ -173,7 +173,7 @@ def blocked_fraction_all_reactions(
     return float(np.mean(blocked))
 
 
-GLOBAL_METRIC_LIST = [
+GLOBAL_METRIC_LIST: list[Callable] = [
     mean_range_all_reactions,
     median_range_all_reactions,
     std_range_all_reactions,
@@ -192,8 +192,8 @@ def error_handler(function: Callable[..., float]) -> Callable[..., float]:
             return function(*args, **kwargs)
         except ValueError as e:
             if "Reaction" in str(e) and "not found in fva_reactions" in str(e):
-                logging.warning(f"{e}: defaulting value to {-np.inf}")
-                return -np.inf
+                logging.warning(f"{e}: defaulting value to {0.0}")
+                return 0.0
             raise
     return wrapper
 
@@ -232,7 +232,7 @@ def _aggregate_reactions(
     return float(np.sum(values))
 
 
-def _ratio_metric(
+def ratio_metric(
     fva_reactions: list[str], 
     fva_results: np.ndarray, 
     grid_clusters: np.ndarray, 
@@ -255,127 +255,6 @@ def _ratio_metric(
     return float(_safe_div(num, den))
 
 
-def set_ratio_metric(
-    metric_name: str,
-    numerator: str | list[str],
-    denominator: str | list[str],
-    num_func: Callable[[Floating, Floating], Floating] | None = None,
-    den_func: Callable[[Floating, Floating], Floating] | None = None,
-    add_to_metrics: bool = True,
-) -> None:
-    def metric(
-        fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
-    ) -> float:
-        ratio = _ratio_metric(
-            fva_reactions, 
-            fva_results, 
-            grid_clusters, 
-            cluster_index, 
-            numerator,
-            denominator,
-            num_func=num_func,
-            den_func=den_func,
-        )
-        return ratio
-
-    metric.__name__ = metric_name
-
-    if add_to_metrics:
-        GLOBAL_METRIC_LIST.append(metric)
-
-
-CARBON_UPTAKE = ["CO2t_e", "NAHCO3CLt_e"]
-NITROGEN_UPTAKE = ["NO3t_e", "NH4t_e"]
-ASSIMILATED_CARBON = ["biomass_mem_lipids_c", "biomass_carb_c", "biomass_TAG_c"]
-ASSIMILATED_NITROGEN = ["biomass_pro_c", "biomass_DNA_c","biomass_RNA_c"]
-
-
-# Relative Rubisco carboxylation vs oxygenation activity within a cluster.
-set_ratio_metric(
-    metric_name="rubisco_carboxylation_fraction", 
-    numerator="RUBISC_h", 
-    denominator="RUBISO_h", 
-    den_func=lambda x,y: x+y,
-)
-
-# Normalized difference between photon uptake and Rubisco flux.
-set_ratio_metric(
-    metric_name="photons_per_rubisc_difference_ratio", 
-    numerator="PHOt_e",
-    denominator="RUBISC_h", 
-    num_func=lambda x,y: x-y, 
-    den_func=lambda x,y: x+y,
-)
-
-# Photon uptake to Rubisco flux ratio.
-set_ratio_metric(
-    metric_name="photons_per_rubisc_simple_ratio",
-    numerator="PHOt_e",
-    denominator="RUBISC_h", 
-)
-
-# Normalized difference between nitrate uptake and Rubisco flux.
-set_ratio_metric(
-    metric_name="no3_per_rubisc_difference_ratio", 
-    numerator="NO3t_e",
-    denominator="RUBISC_h", 
-    num_func=lambda x,y: x-y, 
-    den_func=lambda x,y: x+y,
-)
-
-# Nitrate uptake to Rubisco flux ratio.
-set_ratio_metric(
-    metric_name="no3_per_rubisc_simple_ratio",
-    numerator="NO3t_e",
-    denominator="RUBISC_h",
-)
-
-# Normalized difference between CO2 uptake and Rubisco flux.
-set_ratio_metric(
-    metric_name="co2_per_rubisc_difference_ratio",
-    numerator="CO2t_e",
-    denominator="RUBISC_h",
-    num_func=lambda x, y: x - y,
-    den_func=lambda x, y: x + y,
-)
-
-# CO2 uptake to Rubisco flux ratio.
-set_ratio_metric(
-    numerator="CO2t_e",
-    denominator="RUBISC_h",
-    metric_name="co2_per_rubisc_simple_ratio",
-)
-
-# Relative nitrate uptake compared to total nitrogen biomass synthesis.
-set_ratio_metric(
-    numerator=ASSIMILATED_NITROGEN,
-    denominator=NITROGEN_UPTAKE,
-    metric_name="nitrogen_assimilation_ratio",
-    den_func=lambda x, y: x + y,
-)
-
-# Relative carbon uptake compared to total carbon biomass synthesis.
-set_ratio_metric(
-    numerator=ASSIMILATED_CARBON,
-    denominator=CARBON_UPTAKE,
-    metric_name="carbon_assimilation_ratio",
-    den_func=lambda x, y: x + y,
-)
-
-set_ratio_metric(
-    numerator=CARBON_UPTAKE,
-    denominator=NITROGEN_UPTAKE,
-    metric_name="C_to_N_uptake_ratio",
-)
-
-
-set_ratio_metric(
-    numerator=ASSIMILATED_CARBON,
-    denominator=ASSIMILATED_NITROGEN,
-    metric_name="C_to_N_biomass_ratio",
-)
-
-
 @error_handler
 def no3_to_co2_capacity_ratio(
     fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
@@ -386,5 +265,5 @@ def no3_to_co2_capacity_ratio(
     return float(_safe_div(r_no3 - r_co2, r_no3 + r_co2))
 
 
-GLOBAL_METRIC_LIST.append(no3_to_co2_capacity_ratio)
+#GLOBAL_METRIC_LIST.append(no3_to_co2_capacity_ratio)
 
