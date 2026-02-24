@@ -14,8 +14,11 @@ import cobra.io
 from cobra import Model
 import xlsxwriter
 
+from .constants import FLOAT_ROUNDING, NON_ZERO_TOLERANCE
+
 if TYPE_CHECKING:
-    from .diatom import Diatom
+    from .metabolic_experiment import MetabolicExperiment
+    
 
 
 MODEL_DIRECTORY = Path("models")
@@ -23,6 +26,7 @@ RESULTS_DIRECTORY = Path("result_files")
 
 
 def file_hash(path):
+    """Hashes the model for easier unique identification."""
     with open(MODEL_DIRECTORY / path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
     
@@ -72,7 +76,7 @@ def canonicalize(obj: Any) -> Any:
         return list(sorted(obj, key=repr))
 
     if isinstance(obj, float | int):
-        obj = float(round(obj, 6)) if abs(obj) > 1e-6 else 0.0
+        obj = float(round(obj, FLOAT_ROUNDING)) if abs(obj) > NON_ZERO_TOLERANCE else 0.0
         return str(obj)
 
     if isinstance(obj, (str, bool)) or obj is None:
@@ -88,9 +92,32 @@ class IO():
     - constructing directory.
     - saving and loading per-grid-point results and clustering data.
     - exporting dataframes and plots.
+
+    Parameters
+    ----------
+    parent_class : MetabolicExperiment
+        Parent class object providing access to the metabolic model, projected feasible space, 
+        and analysis/clustering results.
+
+    Attributes
+    ----------
+    model_name : str
+        Name of the metabolic model of study.
+
+    save_files : bool
+        If True, data generated during analysis will be saved at the corresponding directories.
+
+    load_files : bool
+        If True, data will be loaded from disk in order to not recompute results.
+
+    experiment_tag: str
+        String used to identify the experiment. This parameter is set by the user and is complementary
+        to the experiment identifying hash.
+
     """
-    def __init__(self, modelclass: "Diatom", model_name: str):
-        self.modelclass = modelclass
+    def __init__(self, parent_class: "MetabolicExperiment", model_name: str):
+        self.parent_class = parent_class
+
         self.model_name: str = model_name
         self.save_files: bool = False
         self.load_files: bool = False
@@ -100,7 +127,7 @@ class IO():
     @property
     def sampling_hash(self) -> str:
         """Hash used to uniquely identify a sampling instance by its specified parameters."""
-        canonical = json.dumps(self.modelclass.metadata)
+        canonical = json.dumps(self.parent_class.metadata)
         hash = hashlib.sha256(canonical.encode()).hexdigest()[:16]
         initial_label = f"{self.experiment_tag}_#"
         hash = initial_label + hash
@@ -114,9 +141,9 @@ class IO():
         
         Assumes a sampling hash has already been set, and using it alongside the numeric identifier
         files can be saved and loaded safely without overwriting previous results."""
-        n_sampling_angles = self.modelclass.projection.n_sampling_angles
-        n_partitions = self.modelclass.grid.n_partitions
-        n_clusters = self.modelclass.clustering.grid_n_clusters
+        n_sampling_angles = self.parent_class.projection.n_sampling_angles
+        n_partitions = self.parent_class.grid.n_partitions
+        n_clusters = self.parent_class.clustering.n_clusters
 
         identifier = f"SA{n_sampling_angles}_NP{n_partitions}_NC{n_clusters}"
         return identifier
@@ -127,7 +154,7 @@ class IO():
         """String identifier for the current analyzed reaction tuple.
         
         Raises an assertion error if analyzed reactions have not been set."""
-        reaction1, reaction2 = self.modelclass.analyze.analyzed_reactions
+        reaction1, reaction2 = self.parent_class.analyze.analyzed_reactions
         assert not (reaction1 == "" or reaction2 == "")
         return f"{reaction1}_{reaction2}"
 
@@ -151,7 +178,7 @@ class IO():
 
     @property
     def _dataframe_directory(self) -> Path:
-        """"Directory that holds clustering dataframe data.
+        """"Directory that holds clustering dataframes.
         
         Only gets created when called from a method that saves or loads data."""
         path = self.results_directory / "dataframes"
@@ -185,15 +212,15 @@ class IO():
         metadata_path = path / "metadata.json"
         metadata = {
             "experiment_hash": self.sampling_hash,
-            "model_file": self.modelclass.model_id,
-            "model_hash": self.modelclass.metadata["model_hash"],
-            "reaction_tuple": self.modelclass.metadata["reaction_tuple"],
-            "metabolites": self.modelclass.metadata["metabolites"],
-            "reactions": self.modelclass.metadata["reactions"],
-            "bound_constraints": self.modelclass.metadata["bound_constraints"],
-            "flux_constraints": self.modelclass.metadata["flux_constraints"],
-            "use_pfba": self.modelclass.analyze.use_pfba,
-            "pfba_fraction_of_optimum": self.modelclass.analyze.pfba_fraction,
+            "model_file": self.parent_class.model_id,
+            "model_hash": self.parent_class.metadata["model_hash"],
+            "reaction_tuple": self.parent_class.metadata["reaction_tuple"],
+            "metabolites": self.parent_class.metadata["metabolites"],
+            "reactions": self.parent_class.metadata["reactions"],
+            "bound_constraints": self.parent_class.metadata["bound_constraints"],
+            "flux_constraints": self.parent_class.metadata["flux_constraints"],
+            "use_pfba": self.parent_class.analyze.use_pfba,
+            "pfba_fraction_of_optimum": self.parent_class.analyze.pfba_fraction,
             "environment": {
                 "python_version": platform.python_version(),
                 "platform": platform.platform(),
@@ -240,7 +267,7 @@ class IO():
     
     @staticmethod
     def _format_coord(x: float) -> str:
-        return f"{round(x, 6):.6f}".replace('.', 'p').replace('-', 'm')
+        return f"{round(x, FLOAT_ROUNDING):.6f}".replace('.', 'p').replace('-', 'm')
     
 
     def _coordinates_to_filename(self, grid_point: np.ndarray) -> str:
@@ -253,7 +280,7 @@ class IO():
     def _get_directory(self, subdirectory: Literal["feasibility", "qual_fva", "clustering"]) -> Path:
         """Returns the analysis subdirectory requested for the current grid. 
         If it doesn't exists, the method creates it."""
-        Lx, Ly = self.modelclass.grid.grid_dimensions
+        Lx, Ly = self.parent_class.grid.grid_dimensions
         grid_dim = f"Lx_{Lx:.4f}_Ly_{Ly:.4f}"
 
         directory = self._analysis_directory / grid_dim / subdirectory
@@ -263,6 +290,7 @@ class IO():
 
 
     def _get_point_directory(self, grid_point: np.ndarray, subdirectory: Literal["feasibility", "qual_fva"]) -> Path:
+        """Return the file path corresponding to a specific grid point analysis."""
         directory = self._get_directory(subdirectory)
         filename = f"{subdirectory}_{self._coordinates_to_filename(grid_point)}"
         return directory / filename
@@ -292,6 +320,7 @@ class IO():
         
 
     def save_feasible_point(self, grid_point: np.ndarray, is_feasible: bool) -> None:
+        """Store the feasibility status of a grid point."""
         if not self.save_files:
             return
         
@@ -303,6 +332,7 @@ class IO():
 
 
     def save_fva_result(self, grid_point: np.ndarray, fva_results: np.ndarray) -> None:
+        """Store FVA min/max results for a specific grid point."""
         if not self.save_files:
             return
 
@@ -314,12 +344,14 @@ class IO():
 
 
     def get_clusters_directory(self) -> Path:
+        """Return the file path used to store clustering results."""
         filename = f"Clusters_{self.numeric_identifier}.pkl"
         directory = self._get_directory("clustering")
         return directory / filename
 
 
     def load_clusters(self) -> tuple | None:
+        """Load stored clustering results if available."""
         if not self.load_files:
             return
         
@@ -333,6 +365,7 @@ class IO():
 
     
     def save_clusters(self, n_clusters: int, clusters: np.ndarray) -> None:
+        """Save clustering labels and cluster count to disk."""
         if not self.save_files:
             return
         
@@ -355,6 +388,12 @@ class IO():
         metric_list: list | None = None,
         overwrite: bool = False,
     ) -> None: 
+        """Save a cluster-level dataframe to disk.
+
+        The filename encodes numerical experiment parameters, number of reactions,
+        and number of metrics to ensure reproducibility and avoid overwriting
+        incompatible results.
+        """
         if not self.save_files:
             return
         
@@ -371,6 +410,10 @@ class IO():
 
 
     def merge_to_excel(self, df_dict: dict[str, pd.DataFrame]) -> None:
+        """Export multiple dataframes into a single Excel file.
+
+        Each dataframe is written to a separate sheet, allowing compact results.
+        """
         if not self.save_files:
             return
         
@@ -386,6 +429,11 @@ class IO():
 
 
     def save_plot_path(self, extra_label: str | None = None) -> Path | None:
+        """Return the filesystem path where a plot should be saved.
+
+        The path is constructed from the experiment identifier and optional
+        extra labels. Returns None if saving is disabled.
+        """
         if not self.save_files:
             logging.info(f"Plot not saved.")
             return

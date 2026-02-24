@@ -8,28 +8,33 @@ from shapely.geometry.base import BaseGeometry
 from shapely.prepared import prep
 from shapely.ops import unary_union
 
-if TYPE_CHECKING:
-    from .diatom import Diatom
+from .constants import EPS
 
+if TYPE_CHECKING:
+    from .metabolic_experiment import MetabolicExperiment
+    
 
 class Grid():
-    """Grid-based sampler and feasibility evaluator over an existing 2D polytope.
+    """Grid-based sampler over an existing 2D polytope.
 
     This class manages the construction of a regular 2D grid over the
-    parameter space defined by a polytope, augments it with boundary-aware
-    sampling (line intersections and vertices), and evaluates point feasibility.
+    parameter space defined by a polytope, augments it with boundary sampling
+    (line intersections and vertices), and evaluates point feasibility.
 
     It is used to discretize the feasible region of the diatom parameter space 
     for qualitative and quantitative analyses (e.g. FVA, clustering).
 
     Parameters
     ----------
-    diatom : Diatom
-        Parent diatom object providing access to the analyzed polytope
+    parent_class : MetabolicExperiment
+        Parent class providing access to the analyzed polytope
         geometry and analysis pipelines.
 
     Attributes
     ----------
+    n_partitions : int
+        Number of partitions defining the spacing used to generate the sampling grid.
+
     points : np.ndarray, shape (n_points, 2)
         All sampled points in the parameter space, including grid points,
         boundary intersection points, and polytope vertices.
@@ -47,17 +52,15 @@ class Grid():
 
     points_per_axis : tuple[int, int]
         Number of grid points generated along the x and y axes.
-
-    n_partitions : int
-        Number of partitions defining the spacing used to generate the sampling grid.
     """
-    def __init__(self, parent_class: "Diatom"):
+    def __init__(self, parent_class: "MetabolicExperiment"):
         self.parent_class = parent_class
+
         self.n_partitions: int
         self.points: NDArray[np.floating] # shape: ((n_partitions+1)**2, 2)
         self.feasible_points: NDArray[np.bool] 
         self.analyzed_points: NDArray[np.bool] 
-        self.grid_dimensions: NDArray[np.floating] = np.array([0,0])
+        self.grid_dimensions: NDArray[np.floating] 
         self.points_per_axis: tuple[int, int] = (0,0)
         
 
@@ -82,7 +85,7 @@ class Grid():
         return np.asarray(points, dtype=float)
 
 
-    def sample_polytope(self, eps: float = 1e-8) -> None:
+    def sample_polytope(self, n_partitions: int, eps: float = EPS) -> None:
         """Sample candidate points inside and on the boundary of a 2D polytope.
 
         Constructs a set of points by combining:
@@ -96,12 +99,19 @@ class Grid():
 
         Parameters
         ----------
-        eps : float, default=1e-8
+        n_partitions : int
+            Number of partitions used to discretize each axis of the projected polytope.
+            Higher values increase resolution and computational cost but do not change the feasible region.
+
+        eps : float, default=1e-9
             Small buffer applied to the polytope geometry before feasibility checks. 
             This improves numerical robustness for points lying close to the boundary.
 
         Attributes Set
         --------------
+        n_partitions : int
+            Number of partitions used to discretize each axis of the projected polytope.
+
         points : np.ndarray, shape (n_points, 2)
             Array containing all sampled points (grid points, boundary intersections, and polytope vertices).
 
@@ -109,6 +119,9 @@ class Grid():
             Boolean mask indicating whether each sampled point lies within the boundaries of the polytope.
         """
         self.parent_class._require(set_instance=True, polytope=True)
+        assert isinstance(n_partitions, int) and n_partitions > 0
+
+        self.n_partitions = n_partitions
 
         poly = self.parent_class.projection.polytope
         prepared_poly = prep(poly.buffer(eps))

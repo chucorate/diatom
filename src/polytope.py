@@ -5,11 +5,20 @@ import numpy as np
 from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
 
+from .constants import MAX_BRETL_ITERATIONS
+
 if TYPE_CHECKING:
-    from .diatom import Diatom
+    from .metabolic_experiment import MetabolicExperiment
 
 
 class Vertex:
+    """Node representing a vertex of the projected polytope boundary.
+
+    Each vertex stores its 2D coordinates and a pointer to the next vertex
+    in the boundary traversal. The `expanded` flag indicates whether the
+    outgoing edge starting at this vertex has already been processed by
+    the expansion algorithm.
+    """
     def __init__(self, p):
         self.x, self.y = p
         self.next: Vertex | None = None
@@ -17,14 +26,52 @@ class Vertex:
 
 
 class Projection():
-    def __init__(self, diatom: "Diatom"):
-        self.diatom = diatom
+    """Class used for 2D projection and boundary reconstruction of the feasible flux polytope.
+
+    This class computes a two–dimensional projection of the feasible flux space
+    defined by a pair of reactions. The boundary of the projected polytope is approximated using 
+    an iterative directional LP strategy inspired by Bretl's algorithm.
+
+    Parameters
+    ----------
+    parent_class : MetabolicExperiment
+        Parent experiment providing access to the metabolic model, analysis settings,
+        and reaction tuple defining the projection.
+
+    Attributes
+    ----------
+    polytope : shapely.geometry.base.BaseGeometry
+        Convex polygon representing the projected feasible region.
+    """
+    def __init__(self, parent_class: "MetabolicExperiment"):
+        self.parent_class = parent_class
+
         self.polytope: BaseGeometry
-        self.vertices: list[Vertex]
-        self.n_sampling_angles: int = 0
+        self._vertices: list[Vertex]
 
 
     def expand_vertex(self, vertex: Vertex, tol: float = 1e-6) -> Vertex | None:
+        """Attempt to expand an edge of the current polygon.
+
+        Given a vertex and its successor, this method computes an outward normal
+        direction and solves a directional LP to determine whether a new extreme
+        point exists between them. If the candidate point is colinear with the
+        current edge (within tolerance), the edge is marked as fully expanded.
+
+        Parameters
+        ----------
+        vertex : Vertex
+            Starting vertex of the edge to be expanded.
+
+        tol : float, default=1e-6
+            Tolerance used to test colinearity of the candidate point.
+
+        Returns
+        -------
+        Vertex or None
+            A newly created vertex if expansion succeeds, or None if the edge
+            cannot be further expanded.
+        """
         v1 = vertex
         v2 = vertex.next
         if v2 is None:
@@ -34,7 +81,7 @@ class Projection():
         v = np.array([v2.y - v1.y, v1.x - v2.x])
         v /= np.linalg.norm(v)
 
-        xopt, yopt = self._solve_lp_direction(self.diatom.analyze.analyzed_reactions, v)
+        xopt, yopt = self._solve_lp_direction(self.parent_class.analyze.analyzed_reactions, v)
 
         # test de colinealidad
         area = abs((xopt - v1.x)*(v1.y - v2.y) - (yopt - v1.y)*(v1.x - v2.x))
@@ -50,10 +97,12 @@ class Projection():
         return vnew
 
 
-    def _solve_lp_direction(self, reaction_tuple: tuple[str, str], direction: tuple[float, float] | np.ndarray) -> tuple[float, float]:
+    def _solve_lp_direction(
+        self, reaction_tuple: tuple[str, str], direction: tuple[float, float] | np.ndarray,
+    ) -> tuple[float, float]:
         """Solve a directional LP to obtain a boundary point of the feasible flux space.
 
-        Sets a linear objective defined by angle `theta` over two reactions and
+        Sets a linear objective defined by `direction` over two reactions and
         maximizes it to obtain an extreme point of the projected feasible region.
 
         Parameters
@@ -77,7 +126,7 @@ class Projection():
         c0, c1 = direction
         reaction_id_0, reaction_id_1 = reaction_tuple
         
-        with self.diatom.model as model: 
+        with self.parent_class.model as model: 
             reaction_0 = model.reactions.get_by_id(reaction_id_0)
             reaction_1 = model.reactions.get_by_id(reaction_id_1)
 
@@ -114,17 +163,17 @@ class Projection():
         v1.next = v2
         v2.next = v0
 
-        self.vertices = [v0, v1, v2]
+        self._vertices = [v0, v1, v2]
     
     
-    def _iter_expand(self, max_iter: int = 2000) -> None:
+    def _iter_expand(self, max_iter: int = MAX_BRETL_ITERATIONS) -> None:
         """Iteratively expand polygon until closure.
         
         The polygon gets extended until there are no more vertices to expand, or until the
         maximum number of iterations has been reached."""
         n_iterations = 0
 
-        vertices = self.vertices
+        vertices = self._vertices
         v = vertices[0]
 
         while n_iterations < max_iter:
@@ -146,29 +195,34 @@ class Projection():
     
     def _ordered_vertices(self) -> list[Vertex]:
         """Return vertices ordered counterclockwise."""
-        points = np.array([(v.x, v.y) for v in self.vertices])
+        points = np.array([(v.x, v.y) for v in self._vertices])
         center = points.mean(axis=0)
 
         angles = np.arctan2(points[:, 1] - center[1], points[:, 0] - center[0])
         order = np.argsort(angles)
 
-        return [self.vertices[i] for i in order]
+        return [self._vertices[i] for i in order]
 
 
-    def project_polytope_2d(self, max_iter: int = 1000) -> None:
+    def project_polytope_2d(self, max_iter: int = MAX_BRETL_ITERATIONS) -> None:
         """Construct a 2D projection of the feasible flux polytope.
 
         Approximates the boundary of the feasible flux region using Bretl's polytope sampling
         algorithm, and then computes the convex hull of the resulting boundary points.
+
+        Parameters
+        ----------
+        max_iter: int, default=1000
+            Maximum number of iterations allowed to be used by Bretl polytope sampling algorithm.
 
         Attributes Set
         --------------
         polytope : BaseGeometry
             Convex hull of the projected feasible region.
         """
-        self.diatom._require(set_instance=True)
+        self.parent_class._require(set_instance=True)
 
-        self._initial_vertices(self.diatom.analyze.analyzed_reactions)
+        self._initial_vertices(self.parent_class.analyze.analyzed_reactions)
         self._iter_expand(max_iter=max_iter)
         coords = [(v.x, v.y) for v in self._ordered_vertices()]
 
@@ -177,6 +231,6 @@ class Projection():
             poly = poly.buffer(0)
 
         self.polytope = poly
-        self.n_sampling_angles = len(self.vertices)
+        self.n_sampling_angles = len(self._vertices)
 
 

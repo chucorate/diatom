@@ -4,7 +4,7 @@ import prince
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import mutual_info_score
 
-EPS = 1e-9
+from .constants import EPS
 
 
 # Unsupervised scores
@@ -120,13 +120,13 @@ def mutual_information(reaction_states: np.ndarray, clusters: np.ndarray, **kwar
     return float(mutual_info_score(reaction_states, clusters))
 
 
-def rf_importance(qualitative_matrix: pd.DataFrame, grid_clusters: np.ndarray, n_estimators: int = 100, **kwargs) -> pd.Series:
+def rf_importance(qualitative_matrix: pd.DataFrame, clusters: np.ndarray, n_estimators: int = 100, **kwargs) -> pd.Series:
     """Reaction importance based on Random Forest prediction of cluster labels."""
-    if qualitative_matrix.empty or grid_clusters.size == 0:
+    if qualitative_matrix.empty or clusters.size == 0:
         raise RuntimeError("Datos insuficientes (DF vacío o clusters no calculados).")
 
     X = qualitative_matrix.values
-    y = grid_clusters
+    y = clusters
 
     rf = RandomForestClassifier(n_estimators=n_estimators, random_state=42, class_weight='balanced')
     rf.fit(X, y)

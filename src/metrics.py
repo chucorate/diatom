@@ -4,9 +4,7 @@ from functools import wraps
 
 import numpy as np
 
-
-DELTA = 1e-6
-EPS = 1e-9
+from .constants import NON_ZERO_TOLERANCE, EPS, Floating
 
 
 def _midpoint(minmax: np.ndarray) -> np.ndarray:
@@ -17,7 +15,6 @@ def _range(minmax: np.ndarray) -> np.ndarray:
     return minmax[:, 1] - minmax[:, 0]
 
 
-Floating = np.ndarray | float
 def _safe_div(a: Floating, b: Floating, eps: float = EPS) -> Floating:
     return a / (b + eps)
 
@@ -65,19 +62,19 @@ def std_range(minmax: np.ndarray) -> float:
     return float(np.std(r))
 
 
-def frac_variable(minmax: np.ndarray, delta: float = DELTA) -> float:
+def frac_variable(minmax: np.ndarray, delta: float = NON_ZERO_TOLERANCE) -> float:
     """Fraction of points with non-negligible flux variability."""
     r = _range(minmax)
     return float(np.mean(r > delta))
 
 
-def frac_fixed(minmax: np.ndarray, delta: float = DELTA) -> float:
+def frac_fixed(minmax: np.ndarray, delta: float = NON_ZERO_TOLERANCE) -> float:
     """Fraction of points with negligible flux variability"""
     r = _range(minmax)
     return float(np.mean(r < delta))
 
 
-def frac_bidirectional(minmax: np.ndarray, delta: float = DELTA) -> float:
+def frac_bidirectional(minmax: np.ndarray, delta: float = NON_ZERO_TOLERANCE) -> float:
     """Fraction of points allowing flux in both directions."""
     return float(np.mean((minmax[:, 0] < -delta) & (minmax[:, 1] > delta)))
 
@@ -113,62 +110,66 @@ def _rxn_index(fva_reactions: list[str], reaction_id: str) -> int:
         raise ValueError(f"Reaction '{reaction_id}' not found in fva_reactions")
 
 
-def _cluster_mask(grid_clusters: np.ndarray, cluster_index: int) -> np.ndarray:
-    return grid_clusters == cluster_index
+def _cluster_mask(clusters: np.ndarray, cluster_index: int) -> np.ndarray:
+    return clusters == cluster_index
 
 
 def _filtered_minmax(
-    fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int, reaction_id: str
+    fva_reactions: list[str], fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int, reaction_id: str
 ) -> np.ndarray:
     """Returns: array shape (n_points_in_cluster, 2) with [min,max]"""
     idx = _rxn_index(fva_reactions, reaction_id)
-    mask = _cluster_mask(grid_clusters, cluster_index)
+    mask = _cluster_mask(clusters, cluster_index)
     return fva_results[mask, idx, :]
 
 
 def _median_range(
-    fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int, reaction_id: str
+    fva_reactions: list[str], fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int, reaction_id: str
 ) -> float:
-    minmax = _filtered_minmax(fva_reactions, fva_results, grid_clusters, cluster_index, reaction_id)
+    minmax = _filtered_minmax(fva_reactions, fva_results, clusters, cluster_index, reaction_id)
     return float(np.median(_range(minmax)))
 
 
-def _all_reaction_ranges(fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int) -> np.ndarray:
-    mask = _cluster_mask(grid_clusters, cluster_index)
+def _all_reaction_ranges(fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int) -> np.ndarray:
+    mask = _cluster_mask(clusters, cluster_index)
     filtered = fva_results[mask, :, :]  # (n_points, n_rxns, 2)
     ranges = filtered[:, :, 1] - filtered[:, :, 0]
     return ranges
 
 
 def mean_range_all_reactions(
-    fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
+    fva_reactions: list[str], fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int
 ) -> float:
     """Mean flux variability range across all reactions in the cluster."""
-    ranges = _all_reaction_ranges(fva_results, grid_clusters, cluster_index)
+    ranges = _all_reaction_ranges(fva_results, clusters, cluster_index)
     return float(np.mean(ranges))
 
 
 def median_range_all_reactions(
-    fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
+    fva_reactions: list[str], fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int
 ) -> float:
     """Median flux variability range across all reactions in the cluster."""
-    ranges = _all_reaction_ranges(fva_results, grid_clusters, cluster_index)
+    ranges = _all_reaction_ranges(fva_results, clusters, cluster_index)
     return float(np.median(ranges))
 
 
 def std_range_all_reactions(
-    fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
+    fva_reactions: list[str], fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int
 ) -> float:
     """Standard deviation of flux variability ranges across reactions."""
-    ranges = _all_reaction_ranges(fva_results, grid_clusters, cluster_index)
+    ranges = _all_reaction_ranges(fva_results, clusters, cluster_index)
     return float(np.std(ranges))
 
 
 def blocked_fraction_all_reactions(
-    fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int, delta: float = DELTA
+    fva_reactions: list[str], 
+    fva_results: np.ndarray, 
+    clusters: np.ndarray, 
+    cluster_index: int, 
+    delta: float = NON_ZERO_TOLERANCE,
 ) -> float:
     """Fraction of reactions that are blocked across all points in the cluster."""
-    ranges = _all_reaction_ranges(fva_results, grid_clusters, cluster_index)
+    ranges = _all_reaction_ranges(fva_results, clusters, cluster_index)
     blocked = np.all(np.abs(ranges) < delta, axis=0)  # (n_rxns,)
     return float(np.mean(blocked))
 
@@ -201,7 +202,7 @@ def error_handler(function: Callable[..., float]) -> Callable[..., float]:
 def _aggregate_reactions(
     fva_reactions: list[str],
     fva_results: np.ndarray,
-    grid_clusters: np.ndarray,
+    clusters: np.ndarray,
     cluster_index: int,
     reactions: str | list[str],
 ) -> float:
@@ -216,7 +217,7 @@ def _aggregate_reactions(
                 _filtered_minmax(
                     fva_reactions,
                     fva_results,
-                    grid_clusters,
+                    clusters,
                     cluster_index,
                     rxn_id,
                 )
@@ -235,7 +236,7 @@ def _aggregate_reactions(
 def ratio_metric(
     fva_reactions: list[str], 
     fva_results: np.ndarray, 
-    grid_clusters: np.ndarray, 
+    clusters: np.ndarray, 
     cluster_index: int, 
     numerator: str | list[str],
     denominator: str | list[str],
@@ -243,10 +244,10 @@ def ratio_metric(
     den_func: Callable[[Floating, Floating], Floating] | None = None, 
 ) -> float:
     m1 = _aggregate_reactions(
-        fva_reactions, fva_results, grid_clusters, cluster_index, numerator
+        fva_reactions, fva_results, clusters, cluster_index, numerator
     )
     m2 = _aggregate_reactions(
-        fva_reactions, fva_results, grid_clusters, cluster_index, denominator
+        fva_reactions, fva_results, clusters, cluster_index, denominator
     )
 
     num = num_func(m1, m2) if num_func is not None else m1
@@ -257,11 +258,11 @@ def ratio_metric(
 
 @error_handler
 def no3_to_co2_capacity_ratio(
-    fva_reactions: list[str], fva_results: np.ndarray, grid_clusters: np.ndarray, cluster_index: int
+    fva_reactions: list[str], fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int
 ) -> float:
     """Relative nitrate vs CO2 flux capacity based on median ranges."""
-    r_no3 = abs(_median_range(fva_reactions, fva_results, grid_clusters, cluster_index, "NO3t_e"))
-    r_co2 = abs(_median_range(fva_reactions, fva_results, grid_clusters, cluster_index, "CO2t_e"))
+    r_no3 = abs(_median_range(fva_reactions, fva_results, clusters, cluster_index, "NO3t_e"))
+    r_co2 = abs(_median_range(fva_reactions, fva_results, clusters, cluster_index, "CO2t_e"))
     return float(_safe_div(r_no3 - r_co2, r_no3 + r_co2))
 
 

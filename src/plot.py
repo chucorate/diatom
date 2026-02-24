@@ -9,21 +9,20 @@ import seaborn as sns
 from shapely.geometry import Polygon
 
 if TYPE_CHECKING:
-    from .diatom import Diatom
+    from .metabolic_experiment import MetabolicExperiment
 
 
 class Plot():
     """Utility class for visualizing geometric, sampling, clustering and qualitative
-    analysis results associated with a diatom analysis framework instance.
+    analysis results associated with the metabolic experiment.
 
     Parameters
     ----------
-    diatom : Diatom
-        Parent diatom object providing access to the metabolic model,
-        grid sampler, and I/O utilities.
+    parent_class : MetabolicExperiment
+        Parent class providing access to the metabolic model, grid sampler, and I/O utilities.
     """
-    def __init__(self, diatom: "Diatom"):
-        self.diatom = diatom
+    def __init__(self, parent_class: "MetabolicExperiment"):
+        self.parent_class = parent_class
 
 
     def polytope_shape(self, **kwargs):
@@ -33,9 +32,9 @@ class Plot():
         ----
         Intended mainly for debugging the geometry of the projection.
         """
-        self.diatom._require(set_instance=True, polytope=True)
-        poly = self.diatom.projection.polytope
-        grid = self.diatom.grid
+        self.parent_class._require(set_instance=True, polytope=True)
+        poly = self.parent_class.projection.polytope
+        grid = self.parent_class.grid
 
         _, lines = grid._build_grid()
 
@@ -49,7 +48,7 @@ class Plot():
         self._plot_geometry(ax, poly.boundary, color="blue", linewidth=2)
 
         ax.legend()
-        reaction1, reaction2 = self.diatom.analyze.analyzed_reactions
+        reaction1, reaction2 = self.parent_class.analyze.analyzed_reactions
         ax.set_xlabel(reaction1)
         ax.set_ylabel(reaction2)
         title = f"Projected Feasible Polytope Shape ({reaction1} - {reaction2})"
@@ -94,30 +93,28 @@ class Plot():
             Whether to draw sampled grid points.
         s : float, default=15.0
             Marker size for sampled points.
-        alpha : float, default=1.0
-            Marker transparency.
+        kwargs :
+            Extra parameters to be used in the plot title.
         """
-        self.diatom._require(polytope=True, grid_points=True, clusters=True)
+        self.parent_class._require(polytope=True, grid_points=True, clusters=True)
       
-        poly = self.diatom.projection.polytope
+        poly = self.parent_class.projection.polytope
         
-        grid = self.diatom.grid
+        grid = self.parent_class.grid
         points = grid.points
         analyzed = grid.analyzed_points
 
-        clusters = self.diatom.clustering.grid_clusters
+        clusters = self.parent_class.clustering.clusters
 
         points = points[analyzed]
 
         fig, ax = plt.subplots(figsize=(7, 6))
 
-        # --- Polígono ---
         if show_boundary:
             assert isinstance(poly, Polygon)
             x, y = poly.exterior.xy
             ax.plot(x, y, linewidth=1, linestyle="dashed", alpha=0.5, color="gray")
   
-        # --- Puntos sampleados ---
         if show_points and points.size > 0:
             k = int(np.max(clusters))
             cmap = plt.get_cmap("tab20", k)
@@ -130,7 +127,7 @@ class Plot():
             cbar.ax.set_yticklabels([f"C{i}" for i in range(1, k+1)])
             cbar.set_label("Cluster ID")
 
-        reaction1, reaction2 = self.diatom.analyze.analyzed_reactions
+        reaction1, reaction2 = self.parent_class.analyze.analyzed_reactions
         ax.set_xlabel(reaction1)
         ax.set_ylabel(reaction2)
         title = f"Feasible Polytope Sampling ({reaction1} - {reaction2})"
@@ -141,7 +138,7 @@ class Plot():
 
         plt.tight_layout()
         
-        path = self.diatom.io.save_plot_path()
+        path = self.parent_class.io.save_plot_path()
         if path is not None:
             plt.savefig(path)
             
@@ -152,7 +149,7 @@ class Plot():
         """Plot the distribution of qualitative reaction categories per cluster.
 
         Each column in `clusters_df` is interpreted as a cluster and each row as a reaction category assignment. 
-        NaN values are treated as an additional 'variable' category. ¿
+        NaN values are treated as an additional 'variable' category. 
 
         Parameters
         ----------
@@ -184,7 +181,7 @@ class Plot():
             
         category_percents = pd.DataFrame.from_dict(category_percents_dict, orient='index')
         category_percents.fillna(0, inplace=True)
-        category_percents.rename(columns = self.diatom.analyze.category_dict, inplace=True)
+        category_percents.rename(columns = self.parent_class.analyze.category_dict, inplace=True)
 
         # plot
         ax = category_percents.plot.barh(stacked=True, cmap=cmap, figsize=figsize)
@@ -197,13 +194,14 @@ class Plot():
 
 
     def dendrogram(self):
+        """Plots the dendrogram produced by hierarchical clustering."""
         from scipy.cluster.hierarchy import dendrogram as dendro
-        self.diatom._require(clusters=True)
+        self.parent_class._require(clusters=True)
 
         plt.figure(figsize=(10, 5))
         plt.title('Hierarchical Clustering Dendrogram')
         dendro(
-            self.diatom.clustering.linkage_matrix,
+            self.parent_class.clustering.linkage_matrix,
             #truncate_mode='lastp',
             #p=8,
             show_leaf_counts=True,
@@ -222,8 +220,8 @@ class Plot():
         col_wrap : int, default=4
             Number of subplot columns before wrapping.
         """
-        self.diatom._require(qfca=True)
-        maxmin_df = self.diatom.analyze.qFCA
+        self.parent_class._require(qfca=True)
+        maxmin_df = self.parent_class.analyze.qFCA
 
         sns.set(font_scale = 2)
         rxns_analysis = maxmin_df.columns[0:2]
@@ -246,7 +244,7 @@ class Plot():
             ax.fill_between(x, y1,y2, color='none',hatch='//', edgecolor="k", linewidth=0.001)
 
 
-    def reaction_scores(self, df: pd.DataFrame, column: str, top_n: int = 30):
+    def reaction_scores(self, df: pd.DataFrame, column: str, top_n: int = 25):
         """Plot the top-N reactions ranked by a given score.
 
         Assumes `df` is already sorted in descending order by `column`.
@@ -257,7 +255,7 @@ class Plot():
             DataFrame containing reaction scores.
         column : str
             Column name used for ranking.
-        top_n : int, default=30
+        top_n : int, default=25
             Number of top reactions to display.
         """
         plt.figure(figsize=(10, 6))
