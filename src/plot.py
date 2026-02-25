@@ -72,8 +72,6 @@ class Plot():
         # boundary 
         self._plot_geometry(ax, poly.boundary, color="blue", linewidth=2)
 
-        ax.legend()
-
         self._prepare_show(
             ax, main_title="Projected Feasible Polytope Shape", extra_title=extra_title, save=False,
         )
