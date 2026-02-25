@@ -65,8 +65,8 @@ class MetabolicExperiment():
         List of extra reactions considered for the experiment, that are not available by default
         in the loaded model.
     extra_flux_constraints: list
-        List of extra flux constraints considered for the experiment, that are not available by default
-        in the loaded model.
+        List of extra flux constraints considered for the experiment, that are not available by 
+        default in the loaded model.
     extra_bounds: dict[str, tuple]
         Dictionary that contains the imposed boundary constraints by the user.
     """
@@ -93,7 +93,9 @@ class MetabolicExperiment():
         self.extra_bounds: dict[str, tuple]
 
 
-    def _set_objective_functions(self, objective_reactions_dict: dict[str, float] | None = None) -> None:
+    def _set_objective_functions(
+        self, objective_reactions_dict: dict[str, float] | None = None,
+    ) -> None:
         """Set the objective function of the model.
 
         If no objective dictionary is provided, the current objective coefficients
@@ -111,14 +113,18 @@ class MetabolicExperiment():
         # use predefined objective functions
         if objective_reactions_dict is None or len(objective_reactions_dict) == 0:
             linear_coeffs = linear_reaction_coefficients(model)
-            self.objectives = {reaction.id: coeff for reaction, coeff in linear_coeffs.items()} # should be single key,value dict, could hold more   
+            self.objectives = {
+                reaction.id: coeff for reaction, coeff in linear_coeffs.items()
+            } 
             return
         
         # set new objective functions
         for reaction_id, coeff in objective_reactions_dict.items():
             self.objectives[reaction_id] = coeff
 
-        model.objective = {model.reactions.get_by_id(r): coeff for r, coeff in self.objectives.items()}  
+        model.objective = {
+            model.reactions.get_by_id(r): coeff for r, coeff in self.objectives.items()
+        }  
 
         logging.info(f"{model.objective}\n") 
 
@@ -289,9 +295,7 @@ class MetabolicExperiment():
             reactions in `self.analyze.analyzed_reactions`, and each entry is
             imposed as an equality constraint: v_i = grid_point[i].
         """
-
-        # change bounds for each objective reaction
-        for index, reaction_id in enumerate(self.analyze.analyzed_reactions): # member_objectives should be single key dictionary
+        for index, reaction_id in enumerate(self.analyze.analyzed_reactions): 
             value = grid_point[index]
             reaction = cast(Reaction, mirror_model.reactions.get_by_id(reaction_id))
             reaction.bounds = (value, value)    
@@ -346,22 +350,40 @@ class MetabolicExperiment():
         Raises a RuntimeError if a requested artifact has not been computed yet.
         """
         if set_instance and not self._is_sampling_instance_set:
-            raise RuntimeError(f"Sampling instance hasn't been set yet. Run {self.set_sampling_instance.__name__} first!")
+            raise RuntimeError(
+                "Sampling instance hasn't been set yet. "
+                f"Run {self.set_sampling_instance.__name__} first!"
+            )
         
         if polytope and self.projection.polytope.is_empty:
-            raise RuntimeError(f"Projected polytope not yet computed. Run {self.projection.project_polytope_2d.__name__} first!")
+            raise RuntimeError(
+                "Projected polytope not yet computed. "
+                f"Run {self.projection.project_polytope_2d.__name__} first!"
+            )
 
         if grid_points and self.grid.points.size == 0:
-            raise RuntimeError(f"Grid points not yet computed. Run {self.grid.sample_polytope.__name__} first!")
+            raise RuntimeError(
+                "Grid points not yet computed. "
+                f"Run {self.grid.sample_polytope.__name__} first!"
+            )
         
         if qualitative_matrix and self.analyze.qualitative_matrix.empty:
-            raise RuntimeError(f"Qualitative FVA values not yet computed. Run {self.analyze.qualitative_analysis.__name__} first!")
+            raise RuntimeError(
+                "Qualitative FVA values not yet computed. "
+                f"Run {self.analyze.qualitative_analysis.__name__} first!"
+            )
 
         if clusters and self.clustering.clusters.size == 0:
-            raise RuntimeError(f"Clusters not yet computed. Run {self.clustering.set_clusters.__name__} first!")
+            raise RuntimeError(
+                "Clusters not yet computed. "
+                f"Run {self.clustering.set_clusters.__name__} first!"
+            )
 
         if qfca and self.analyze.qFCA.empty:
-            raise RuntimeError(f"qFCA not yet computed. Run {self.analyze.quan_FCA.__name__} first!")
+            raise RuntimeError(
+                "qFCA not yet computed. "
+                f"Run {self.analyze.quan_FCA.__name__} first!"
+            )
 
 
     def set_sampling_instance(
@@ -375,8 +397,9 @@ class MetabolicExperiment():
     ) -> None:
         """Configure and initialize a sampling experiment for the current diatom model.
 
-        This method defines the biological experiment (model + new metabolites/reactions/constraints + objective).
-        It also prepares the filesystem structure used to cache and reuse previously computed results.
+        This method defines the biological experiment (model + new metabolites/reactions/constraints 
+        + objective). It also prepares the filesystem structure used to cache and reuse previously 
+        computed results.
 
         The experiment identity is determined exclusively by:
             - model file and its content hash

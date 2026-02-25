@@ -14,10 +14,9 @@ if TYPE_CHECKING:
 class Vertex:
     """Node representing a vertex of the projected polytope boundary.
 
-    Each vertex stores its 2D coordinates and a pointer to the next vertex
-    in the boundary traversal. The `expanded` flag indicates whether the
-    outgoing edge starting at this vertex has already been processed by
-    the expansion algorithm.
+    Each vertex stores its 2D coordinates and a pointer to the next vertex in the boundary 
+    traversal. The `expanded` flag indicates whether the outgoing edge starting at this vertex 
+    has already been processed by the expansion algorithm.
     """
     def __init__(self, p):
         self.x, self.y = p
@@ -142,7 +141,9 @@ class Projection():
             return float(flux_0), float(flux_1)
         
 
-    def _initial_vertices(self, reaction_tuple: tuple[str, str], max_tries: int = 360, tol: float = 1e-6):
+    def _initial_vertices(
+        self, reaction_tuple: tuple[str, str], max_tries: int = 360, tol: float = 1e-6,
+    ) -> None:
         """Find three non-colinear extreme points to initialize the polygon."""
         angles = np.linspace(0, 2*np.pi, max_tries, endpoint=False)
         points: list[tuple[float, float]] = []

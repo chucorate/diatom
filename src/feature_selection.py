@@ -32,7 +32,9 @@ def mca_score(
     **kwargs
 ) -> pd.Series:
     """Unsupervised reaction relevance score using Multiple Correspondence Analysis."""
-    informative_cols = qualitative_matrix.columns[qualitative_matrix.nunique(dropna=True) >= min_nunique]
+    informative_cols = qualitative_matrix.columns[
+        qualitative_matrix.nunique(dropna=True) >= min_nunique
+    ]
     if len(informative_cols) == 0:
         raise ValueError("No hay reacciones con variabilidad suficiente para MCA.")
     Q = qualitative_matrix[informative_cols].copy()
@@ -46,7 +48,9 @@ def mca_score(
     # index format: "REACTION__sSTATE"
     cat_contrib = (mca.column_contributions_.iloc[:, :n_components].fillna(0.0))
 
-    reaction_scores = (cat_contrib.groupby(lambda s: s.split("__")[0]).sum().sum(axis=1).sort_values(ascending=False))
+    reaction_scores = (
+        cat_contrib.groupby(lambda s: s.split("__")[0]).sum().sum(axis=1).sort_values(ascending=False)
+    )
     return reaction_scores
 
 
@@ -120,7 +124,9 @@ def mutual_information(reaction_states: np.ndarray, clusters: np.ndarray, **kwar
     return float(mutual_info_score(reaction_states, clusters))
 
 
-def rf_importance(qualitative_matrix: pd.DataFrame, clusters: np.ndarray, n_estimators: int = 100, **kwargs) -> pd.Series:
+def rf_importance(
+    qualitative_matrix: pd.DataFrame, clusters: np.ndarray, n_estimators: int = 100, **kwargs
+) -> pd.Series:
     """Reaction importance based on Random Forest prediction of cluster labels."""
     if qualitative_matrix.empty or clusters.size == 0:
         raise RuntimeError("Datos insuficientes (DF vacío o clusters no calculados).")
@@ -132,7 +138,9 @@ def rf_importance(qualitative_matrix: pd.DataFrame, clusters: np.ndarray, n_esti
     rf.fit(X, y)
 
     importances = rf.feature_importances_
-    feature_importance_series = pd.Series(importances, index=qualitative_matrix.columns).sort_values(ascending=False)
+    feature_importance_series = pd.Series(
+        importances, index=qualitative_matrix.columns
+    ).sort_values(ascending=False)
 
     return feature_importance_series
 

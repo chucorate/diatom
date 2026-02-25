@@ -101,7 +101,8 @@ class Grid():
         ----------
         n_partitions : int
             Number of partitions used to discretize each axis of the projected polytope.
-            Higher values increase resolution and computational cost but do not change the feasible region.
+            Higher values increase resolution and computational cost but do not change 
+            the feasible region.
 
         eps : float, default=1e-9
             Small buffer applied to the polytope geometry before feasibility checks. 
@@ -113,10 +114,12 @@ class Grid():
             Number of partitions used to discretize each axis of the projected polytope.
 
         points : np.ndarray, shape (n_points, 2)
-            Array containing all sampled points (grid points, boundary intersections, and polytope vertices).
+            Array containing all sampled points (grid points, boundary intersections, 
+            and polytope vertices).
 
         feasible_points : np.ndarray, shape (n_points,)
-            Boolean mask indicating whether each sampled point lies within the boundaries of the polytope.
+            Boolean mask indicating whether each sampled point lies within the 
+            boundaries of the polytope.
         """
         self.parent_class._require(set_instance=True, polytope=True)
         assert isinstance(n_partitions, int) and n_partitions > 0
@@ -158,8 +161,8 @@ class Grid():
             Returns a tuple `(grid_points, grid_lines)`.
 
         grid_points: np.ndarray
-            Array containing all sampled points within the bounding box. It doesn't include intersections
-            between the polytope boundaries.
+            Array containing all sampled points within the bounding box. It doesn't include 
+            intersections between the polytope boundaries.
 
         grid_lines: BaseGeometry
             Geometry containing vertical and horizontal lines that define the grid sampling space.

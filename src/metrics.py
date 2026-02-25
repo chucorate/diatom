@@ -19,7 +19,7 @@ def _safe_div(a: Floating, b: Floating, eps: float = EPS) -> Floating:
     return a / (b + eps)
 
 
-# ================================================== REACTION METRICS ==================================================
+# ====================================== REACTION METRICS ======================================
 
 
 def minimum(minmax: np.ndarray) -> float:
@@ -100,7 +100,7 @@ REACTION_METRIC_LIST: list[Callable] = [
 ]
 
 
-# ================================================== GLOBAL METRICS ==================================================
+# ====================================== GLOBAL METRICS ======================================
 
 
 def _rxn_index(fva_reactions: list[str], reaction_id: str) -> int:
@@ -115,7 +115,11 @@ def _cluster_mask(clusters: np.ndarray, cluster_index: int) -> np.ndarray:
 
 
 def _filtered_minmax(
-    fva_reactions: list[str], fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int, reaction_id: str
+    fva_reactions: list[str], 
+    fva_results: np.ndarray, 
+    clusters: np.ndarray, 
+    cluster_index: int, 
+    reaction_id: str,
 ) -> np.ndarray:
     """Returns: array shape (n_points_in_cluster, 2) with [min,max]"""
     idx = _rxn_index(fva_reactions, reaction_id)
@@ -124,13 +128,19 @@ def _filtered_minmax(
 
 
 def _median_range(
-    fva_reactions: list[str], fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int, reaction_id: str
+    fva_reactions: list[str], 
+    fva_results: np.ndarray, 
+    clusters: np.ndarray, 
+    cluster_index: int, 
+    reaction_id: str,
 ) -> float:
     minmax = _filtered_minmax(fva_reactions, fva_results, clusters, cluster_index, reaction_id)
     return float(np.median(_range(minmax)))
 
 
-def _all_reaction_ranges(fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int) -> np.ndarray:
+def _all_reaction_ranges(
+    fva_results: np.ndarray, clusters: np.ndarray, cluster_index: int
+) -> np.ndarray:
     mask = _cluster_mask(clusters, cluster_index)
     filtered = fva_results[mask, :, :]  # (n_points, n_rxns, 2)
     ranges = filtered[:, :, 1] - filtered[:, :, 0]
@@ -182,7 +192,7 @@ GLOBAL_METRIC_LIST: list[Callable] = [
 ]
 
 
-# ================================================== CUSTOM GLOBAL METRICS ==================================================
+# ====================================== CUSTOM GLOBAL METRICS ======================================
 
 
 def error_handler(function: Callable[..., float]) -> Callable[..., float]:

@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
+from matplotlib.axes import Axes
 import seaborn as sns
 from shapely.geometry import Polygon
 
@@ -25,7 +26,31 @@ class Plot():
         self.parent_class = parent_class
 
 
-    def polytope_shape(self, **kwargs):
+    def _prepare_show(
+        self, ax: Axes, main_title: str, extra_title: str | None = None, save: bool = False,
+    ) -> None:
+        reaction1, reaction2 = self.parent_class.analyze.analyzed_reactions
+        ax.set_xlabel(reaction1)
+        ax.set_ylabel(reaction2)
+
+        title = f"{main_title} ({reaction1} - {reaction2})"
+        if extra_title is not None:
+            title += f", {extra_title}"
+
+        ax.set_title(title)
+        ax.grid(True)
+
+        plt.tight_layout()
+        
+        if save:
+            path = self.parent_class.io.save_plot_path()
+            if path is not None:
+                plt.savefig(path)
+            
+        plt.show()
+
+
+    def polytope_shape(self, extra_title: str | None = None):
         """Plot the projected feasible polytope together with the sampling grid.
 
         Note
@@ -48,6 +73,11 @@ class Plot():
         self._plot_geometry(ax, poly.boundary, color="blue", linewidth=2)
 
         ax.legend()
+
+        self._prepare_show(
+            ax, main_title="Projected Feasible Polytope Shape", extra_title=extra_title, save=False,
+        )
+        """
         reaction1, reaction2 = self.parent_class.analyze.analyzed_reactions
         ax.set_xlabel(reaction1)
         ax.set_ylabel(reaction2)
@@ -59,9 +89,10 @@ class Plot():
 
         plt.tight_layout()
         plt.show()
+        """
 
 
-    def _plot_geometry(self, ax, geom, **kwargs):
+    def _plot_geometry(self, ax: Axes, geom, **kwargs):
         """Helper method to plot Shapely geometries on a Matplotlib axis."""
         if geom.geom_type == "Polygon":
             x, y = geom.exterior.xy
@@ -81,7 +112,7 @@ class Plot():
         show_boundary: bool = False, 
         show_points: bool = True,
         s: float = 15.0, 
-        **kwargs,
+        extra_title: str | None = None,
     ) -> None:
         """Plot sampled grid points inside the feasible polytope, colored by cluster.
 
@@ -127,6 +158,10 @@ class Plot():
             cbar.ax.set_yticklabels([f"C{i}" for i in range(1, k+1)])
             cbar.set_label("Cluster ID")
 
+        self._prepare_show(
+            ax, main_title="Feasible Polytope Sampling", extra_title=extra_title, save=True,
+        )
+        """
         reaction1, reaction2 = self.parent_class.analyze.analyzed_reactions
         ax.set_xlabel(reaction1)
         ax.set_ylabel(reaction2)
@@ -143,13 +178,15 @@ class Plot():
             plt.savefig(path)
             
         plt.show()
+        """
 
-
-    def cluster_distribution(self, clusters_df: pd.DataFrame, cmap: str = 'Accent', figsize: tuple[int, int] = (10,5)) -> pd.DataFrame:
+    def cluster_distribution(
+        self, clusters_df: pd.DataFrame, cmap: str = 'Accent', figsize: tuple[int, int] = (10,5)
+    ) -> pd.DataFrame:
         """Plot the distribution of qualitative reaction categories per cluster.
 
-        Each column in `clusters_df` is interpreted as a cluster and each row as a reaction category assignment. 
-        NaN values are treated as an additional 'variable' category. 
+        Each column in `clusters_df` is interpreted as a cluster and each row as a reaction 
+        category assignment. NaN values are treated as an additional 'variable' category. 
 
         Parameters
         ----------
@@ -227,7 +264,16 @@ class Plot():
         rxns_analysis = maxmin_df.columns[0:2]
         sns.set_style("whitegrid")
 
-        g=sns.relplot(data = maxmin_df, x=rxns_analysis[0], y=rxns_analysis[1], col = 'point', hue='FVA', kind='line', col_wrap=col_wrap, lw=0)
+        g=sns.relplot(
+            data = maxmin_df, 
+            x=rxns_analysis[0], 
+            y=rxns_analysis[1], 
+            col = 'point', 
+            hue='FVA', 
+            kind='line', 
+            col_wrap=col_wrap, 
+            lw=0,
+        )
         points = maxmin_df.point.unique()
         for i,ax in enumerate(g.axes):
             p = points[i]

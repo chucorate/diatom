@@ -6,6 +6,7 @@ import pandas as pd
 from scipy.spatial import distance
 from scipy.cluster.hierarchy import fcluster
 from scipy.cluster import hierarchy
+from cobra import Reaction
 
 from src.metrics import REACTION_METRIC_LIST, GLOBAL_METRIC_LIST, Floating, ratio_metric
 from src.feature_selection import PER_REACTION_SCORE_FUNCTIONS, GLOBAL_SCORE_FUNCTIONS
@@ -25,10 +26,10 @@ class Clustering():
 
     Attributes
     ----------
-    grid_n_clusters : int
+    n_clusters : int
         Number of clusters produced.
 
-    grid_clusters : np.ndarray, shape (n_points, )
+    clusters : np.ndarray, shape (n_points, )
         Array containing the cluster labels of all grid points. 
 
     linkage_matrix : np.ndarray, shape (n_points-1, 4)
@@ -250,7 +251,7 @@ class Clustering():
             overwrite=overwrite,
         )
         self.representatives = representatives
-        return representatives
+        return representatives.reset_index(names="reaction id")
     
 
     def n_clusters_score(self, threshold: float) -> tuple[float, pd.Series]:
@@ -333,7 +334,7 @@ class Clustering():
         """
         self.parent_class._require(clusters=True)
         
-        grid_clusters = self.clusters
+        clusters = self.clusters
         fva_reactions = self.parent_class.analyze.fva_reactions
         fva_results = self.parent_class.analyze.fva_results
 
@@ -342,7 +343,7 @@ class Clustering():
         rows: list[dict[str, Any]] = []
         for cluster_index in range(1, self.n_clusters+1):
             metric_results = [
-                metric(fva_reactions, fva_results, grid_clusters, cluster_index) 
+                metric(fva_reactions, fva_results, clusters, cluster_index) 
                 for metric in self.global_metrics
             ]
 
@@ -360,7 +361,9 @@ class Clustering():
         return df
     
 
-    def get_cluster_metrics_per_reaction(self, reaction_list: list[str], overwrite: bool = False) -> pd.DataFrame:
+    def get_cluster_metrics_per_reaction(
+        self, reaction_list: list[str], overwrite: bool = False,
+    ) -> pd.DataFrame:
         """Compute per-reaction metrics for each grid cluster.
 
         For every reaction in `reaction_list` and every cluster, metrics defined
@@ -389,7 +392,7 @@ class Clustering():
         """
         self.parent_class._require(clusters=True)
 
-        grid_clusters = self.clusters
+        clusters = self.clusters
         fva_reactions = self.parent_class.analyze.fva_reactions
         fva_results = self.parent_class.analyze.fva_results
 
@@ -402,7 +405,7 @@ class Clustering():
             reaction_fva_results = (fva_results[:, reaction_index, :])
 
             for cluster_index in range(1, self.n_clusters+1):
-                filtered_results = reaction_fva_results[grid_clusters == cluster_index]
+                filtered_results = reaction_fva_results[clusters == cluster_index]
                 metric_results = [metric(filtered_results) for metric in self.reaction_metrics]
 
                 for metric_name, metric_value in zip(metric_names, metric_results):
@@ -423,9 +426,25 @@ class Clustering():
         )
         return df
 
+
+    def get_reactions_dataframe(self, reaction_list: list[str]) -> pd.DataFrame:
+        "Creates a dataframe with relevant information about every reaction given."
+        rows = []
+        for reaction_id in reaction_list:
+            reaction = cast(Reaction, self.parent_class.model.reactions.get_by_id(reaction_id))
+            rows.append({
+                "Reaction ID": reaction_id,
+                "Full Name": reaction.name,
+                "Reaction": reaction.reaction,
+                "Metabolite List": set([metabolite.name for metabolite in reaction.metabolites.keys()])
+            })
+
+        reactions_df = pd.DataFrame(rows)
+        return reactions_df
+
     
     def reaction_scores(
-        self, sort_score: bool = True, sort_index: int = 0, **kwargs,
+        self, sort_score: bool = True, sort_index: int = 0, top_T: int = 20, **kwargs,
     ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
         """Compute reaction-level scores and perform consensus feature selection.
 
@@ -434,11 +453,31 @@ class Clustering():
         score matrix is then used to select a subset of reactions via consensus
         voting.
 
+        Parameters
+        ----------
+        sort_score : bool, default=True
+            If True, the score DataFrame is sorted in descending order according
+            to the metric specified by `sort_index`.
+
+        sort_index : int, default=0
+            Index of the score metric (column) used to sort the score DataFrame.
+            If the index is out of range, the first metric is used.
+
+        top_T : int, default=20
+            Number of top-ranked reactions considered by each metric during
+            consensus feature selection.
+
+        **kwargs
+            Additional keyword arguments passed to `_consensus_feature_selection`.
+
         Returns
         -------
         score_df : pd.DataFrame
             DataFrame indexed by reaction ID. Columns correspond to score functions from 
             `global_score_metrics` and `reaction_score_metrics`.
+        rank_df : pd.DataFrame
+            DataFrame indexed by reaction ID, containing how well each reaction performed
+            against all considered metrics (1 = best).
         selected_reactions : list[str]
             Reactions selected via consensus voting.
 
@@ -455,7 +494,10 @@ class Clustering():
         scores_df = pd.DataFrame(index=self.qualitative_matrix.columns)
 
         for score_func in self.global_score_metrics:
-            scores_df[score_func.__name__] = score_func(qualitative_matrix=self.qualitative_matrix, grid_clusters=self.clusters)
+            scores_df[score_func.__name__] = score_func(
+                qualitative_matrix=self.qualitative_matrix, 
+                clusters=self.clusters,
+            )
 
         for score_func in self.reaction_score_metrics:
             func_name = score_func.__name__
@@ -474,8 +516,12 @@ class Clustering():
         if sort_score:
             scores_df = scores_df.sort_values(by=col_to_sort, ascending=False)
 
-        metric_names = [f.__name__ for f in self.global_score_metrics] + [f.__name__ for f in self.reaction_score_metrics]
-        rank_df, feature_selection = self._consensus_feature_selection(scores_df, metric_names, **kwargs)
+        metric_names = (
+            [f.__name__ for f in self.global_score_metrics] + [f.__name__ for f in self.reaction_score_metrics]
+        )
+        rank_df, feature_selection = self._consensus_feature_selection(
+            scores_df, metric_names, top_T=top_T, **kwargs,
+        )
         logging.info(f"Number of reactions selected: {len(feature_selection)}\n")
 
         return scores_df, rank_df, feature_selection
@@ -483,7 +529,7 @@ class Clustering():
 
     @staticmethod
     def _consensus_feature_selection(
-        score_df: pd.DataFrame, score_cols: list[str], top_T: int = 40, min_votes: int = 2, **kwargs,
+        score_df: pd.DataFrame, score_cols: list[str], top_T: int, min_votes: int = 2, **kwargs,
     ) -> tuple[pd.DataFrame, list[str]]:
         """Consensus feature selection via top-T voting across multiple scores.
 
@@ -500,7 +546,7 @@ class Clustering():
 
         Returns
         -------
-        rank_df : DataFrame
+        rank_df : pd.DataFrame
             Per-metric rank positions (1 = best).
         selected_reactions : list[str]
             Reactions selected by consensus voting.
@@ -617,3 +663,4 @@ class Clustering():
 
         for list_name, metric_list in all_metrics_dict.items():
             print(f"{list_name}:\n{[metric.__name__ for metric in metric_list]}\n")
+

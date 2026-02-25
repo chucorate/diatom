@@ -283,7 +283,9 @@ class Analyze():
         """
         loaded_point = self.parent_class.io.load_point(grid_point, "qual_fva")
         if isinstance(loaded_point, np.ndarray):
-            qualitative_vector = self._qualitative_translate(loaded_point, non_zero_tolerance=non_zero_tolerance)
+            qualitative_vector = self._qualitative_translate(
+                loaded_point, non_zero_tolerance=non_zero_tolerance,
+            )
             return (qualitative_vector, loaded_point)
         
         if not self.fva_reactions:
@@ -293,7 +295,9 @@ class Analyze():
             self.parent_class.fix_flux_rates(model, grid_point)
 
             if self.use_pfba:
-                self.parent_class.apply_pfba_constraint(model, fraction_of_optimum=self.pfba_fraction)
+                self.parent_class.apply_pfba_constraint(
+                    model, fraction_of_optimum=self.pfba_fraction,
+                )
                 
             # analyze feasible point
             rxn_fva = flux_variability_analysis(model, reaction_list=self.fva_reactions) # type: ignore              
@@ -301,7 +305,9 @@ class Analyze():
             fva_results = rxn_fva.values
             self.parent_class.io.save_fva_result(grid_point, fva_results)
 
-        qualitative_vector = self._qualitative_translate(fva_results, non_zero_tolerance=non_zero_tolerance)
+        qualitative_vector = self._qualitative_translate(
+            fva_results, non_zero_tolerance=non_zero_tolerance,
+        )
 
         return (qualitative_vector, fva_results)
 
@@ -354,7 +360,10 @@ class Analyze():
                 distances = np.linalg.norm(feasible_points-search_point, axis=1)
                 min_index = np.argmin(distances)
                 analyze_points.append(min_index)
-                logging.debug(f"The closest point to {search_point} is {feasible_points[min_index]}, at a distance of {distances[min_index]}")
+                logging.debug(
+                    f"The closest point to {search_point} is {feasible_points[min_index]}, "
+                    f"at a distance of {distances[min_index]}"
+                )
 
         qFCA_data = []
 

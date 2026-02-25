@@ -111,8 +111,8 @@ class IO():
         If True, data will be loaded from disk in order to not recompute results.
 
     experiment_tag: str
-        String used to identify the experiment. This parameter is set by the user and is complementary
-        to the experiment identifying hash.
+        String used to identify the experiment. This parameter is set by the user and is 
+        complementary to the experiment identifying hash.
 
     """
     def __init__(self, parent_class: "MetabolicExperiment", model_name: str):
@@ -262,7 +262,7 @@ class IO():
 
 
 
-    # =================================================== ANALYSIS DIRECTORY ===================================================
+    # ====================================== ANALYSIS DIRECTORY ======================================
 
     
     @staticmethod
@@ -277,7 +277,9 @@ class IO():
         return f"x_{x_str}_y_{y_str}.pkl"
     
 
-    def _get_directory(self, subdirectory: Literal["feasibility", "qual_fva", "clustering"]) -> Path:
+    def _get_directory(
+        self, subdirectory: Literal["feasibility", "qual_fva", "clustering"],
+    ) -> Path:
         """Returns the analysis subdirectory requested for the current grid. 
         If it doesn't exists, the method creates it."""
         Lx, Ly = self.parent_class.grid.grid_dimensions
@@ -289,14 +291,18 @@ class IO():
         return directory
 
 
-    def _get_point_directory(self, grid_point: np.ndarray, subdirectory: Literal["feasibility", "qual_fva"]) -> Path:
+    def _get_point_directory(
+        self, grid_point: np.ndarray, subdirectory: Literal["feasibility", "qual_fva"],
+    ) -> Path:
         """Return the file path corresponding to a specific grid point analysis."""
         directory = self._get_directory(subdirectory)
         filename = f"{subdirectory}_{self._coordinates_to_filename(grid_point)}"
         return directory / filename
     
 
-    def load_point(self, grid_point: np.ndarray, analysis: Literal["feasibility", "qual_fva"]) -> bool | tuple | None:
+    def load_point(
+        self, grid_point: np.ndarray, analysis: Literal["feasibility", "qual_fva"],
+    ) -> bool | tuple | None:
         """Load per-point analysis results from disk.
 
         Returns
@@ -376,7 +382,7 @@ class IO():
             pickle.dump(clusters_tuple, f)
 
 
-    # =================================================== DATAFRAME DIRECTORY ===================================================
+    # ====================================== DATAFRAME DIRECTORY ======================================
 
 
     def save_cluster_df(
@@ -425,7 +431,7 @@ class IO():
                 df.to_excel(writer, sheet_name=df_name, index=False)
 
 
-    # =================================================== PLOT DIRECTORY ===================================================
+    # ====================================== PLOT DIRECTORY ======================================
 
 
     def save_plot_path(self, extra_label: str | None = None) -> Path | None:
