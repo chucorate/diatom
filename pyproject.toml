@@ -1,0 +1,26 @@
+[project]
+name = "diatom"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+dependencies = [
+  "numpy",
+  "pandas",
+  "scipy",
+  "tqdm",
+  "cobra",
+  "gurobipy",
+  "shapely",
+  "scikit-learn",
+  "prince",
+  "matplotlib",
+  "seaborn",
+  "xlsxwriter",
+  "ipykernel",
+]
+
+[tool.uv]
+managed = true
+
+[tool.uv.sources]
+pypi = { url = "https://pypi.org/simple" }
